@@ -1,0 +1,8 @@
+LIBRARY OllyBridge110
+EXPORTS
+  _ODBG_Plugindata=_ODBG_Plugindata
+  _ODBG_Plugininit=_ODBG_Plugininit
+  _ODBG_Pluginmenu=_ODBG_Pluginmenu
+  _ODBG_Pluginaction=_ODBG_Pluginaction
+  _ODBG_Pluginclose=_ODBG_Pluginclose
+  _ODBG_Plugindestroy=_ODBG_Plugindestroy
