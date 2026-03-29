@@ -1,58 +1,64 @@
 # OllyDbg MCP Bridge
 
-This folder contains a working MCP bridge for **OllyDbg 1.10** so Codex can read and lightly control the debugger without scraping the UI.
+An MCP bridge for **OllyDbg 1.10** that lets an MCP client inspect and lightly control the debugger through a small plugin and a Python server.
 
-## What is here
+The project is split into two parts:
+
+- a native OllyDbg plugin that exposes a named pipe at `\\.\pipe\OllyBridge110`
+- a Python MCP server that translates tool calls into pipe requests and JSON responses
+
+This repo is source-first. Compiled binaries, caches, and machine-specific paths are intentionally excluded.
+
+## Features
+
+- debugger status, pause metadata, and current instruction helpers
+- register, memory, stack, and disassembly reads
+- module, thread, and breakpoint enumeration
+- software and hardware breakpoint helpers
+- basic execution controls such as pause, continue, run, and step helpers
+- address lookup and light session cleanup helpers
+
+## Repository Layout
 
 - `server.py`
-  - the MCP server built with the installed Python `mcp` package
-  - talks directly to `\\.\pipe\OllyBridge110`
-- `plugin_stub/ollydbg110_bridge.c`
-  - the OllyDbg 1.10 plugin bridge source
-- `test_olly_bridge.py`
-  - a smoke-test script for the bridge
+  Python MCP server
 - `start_olly_bridge.ps1`
-  - convenience launcher for the MCP server
+  Convenience launcher for local testing
+- `test_olly_bridge.py`
+  Small smoke test for the Python side
+- `plugin_stub/ollydbg110_bridge.c`
+  OllyDbg 1.10 plugin bridge source
+- `plugin_stub/OllyBridge110.def`
+  Export definition file for the plugin
 
 ## Architecture
 
-1. Codex talks to the MCP server.
-2. The MCP server calls a named pipe exposed by the OllyDbg plugin.
-3. The plugin performs the requested debugger action and returns JSON.
+1. An MCP client calls a tool exposed by `server.py`.
+2. The server sends a JSON request over `\\.\pipe\OllyBridge110`.
+3. The OllyDbg plugin performs the debugger action on the UI/debugger side.
+4. The plugin returns JSON back through the pipe.
 
-This keeps the bridge small and practical while still covering the reverse-engineering tasks we care about.
+## Requirements
 
-## Quick start
+- Windows
+- Python 3
+- the Python `mcp` package
+- OllyDbg 1.10
+- the OllyDbg 1.10 plugin SDK headers and import libraries needed to build a plugin
 
-Run the MCP server in a terminal:
+## Building the Plugin
 
-```powershell
-python .\server.py --transport stdio
-```
+The source lives in [`plugin_stub/ollydbg110_bridge.c`](./plugin_stub/ollydbg110_bridge.c).
 
-Or use the helper script:
+Build an `OllyBridge110.dll` against the OllyDbg 1.10 SDK using your preferred Windows C toolchain. The resulting DLL should be copied into the plugin directory configured in `ollydbg.ini`.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\start_olly_bridge.ps1 -OllyDir 'C:\Path\To\OllyDbg' -PluginDir 'C:\Path\To\OllyPlugins'
-```
+At a minimum, the build needs to:
 
-By default the server expects the pipe:
+- include the OllyDbg 1.10 SDK headers such as `Plugin.h`
+- export the expected plugin entry points
+- produce a 32-bit DLL compatible with OllyDbg 1.10
 
-```text
-\\.\pipe\OllyBridge110
-```
-
-## OllyDbg 1.10 target
-
-This build is aimed at **OllyDbg 1.10**.
-
-You will need:
-
-- an OllyDbg 1.10 installation
-- the OllyDbg 1.10 plugin SDK
-- a plugin directory configured in `ollydbg.ini`
-
-The plugin uses real 1.10 API entry points such as:
+The plugin uses real OllyDbg 1.10 APIs including:
 
 - `ODBG_Plugindata`
 - `ODBG_Plugininit`
@@ -64,9 +70,34 @@ The plugin uses real 1.10 API entry points such as:
 - `Setcpu`
 - `Plugingetvalue(...)`
 
-## Exposed tools
+## Running the Server
 
-Current tool surface:
+From the repository root:
+
+```powershell
+python .\server.py --transport stdio
+```
+
+You can also use the helper launcher:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\start_olly_bridge.ps1 -OllyDir 'C:\Path\To\OllyDbg' -PluginDir 'C:\Path\To\OllyPlugins'
+```
+
+By default the Python side expects:
+
+```text
+\\.\pipe\OllyBridge110
+```
+
+You can override the defaults with environment variables:
+
+- `OLLYDBG_PIPE_NAME`
+- `OLLYDBG_BRIDGE_URL`
+
+## Exposed Tool Surface
+
+Current tools include:
 
 - `olly_status`
 - `olly_goto_address`
@@ -99,24 +130,20 @@ Current tool surface:
 - `olly_clear_all_breakpoints`
 - `olly_prepare_session`
 
-## Stability notes
+## Stability Notes
 
-Most reliable today:
+Most reliable in testing:
 
-- reads and disassembly
-- EIP/current-instruction helpers
-- module/address lookup
-- native run-to-address / continue on the UI thread
-- clean session preparation / breakpoint cleanup
-- decoded pause and trap metadata
-- software breakpoints
-- hardware breakpoints tracked through the bridge
-- stack helpers
-- pause
+- status and pause metadata
+- register, stack, memory, and disassembly reads
+- module, thread, and address lookup helpers
+- software breakpoint management
+- hardware breakpoint tracking through the bridge
+- pause and clean session preparation
 
-Less reliable in the current Windows-on-ARM setup:
+Less reliable, especially around unusual target states or packed samples:
 
-- `olly_run` state reporting right around startup can still be noisy
+- `olly_run` reporting right around startup
 - `olly_step_into`
 - `olly_step_over`
 - `olly_set_label`
@@ -124,25 +151,12 @@ Less reliable in the current Windows-on-ARM setup:
 
 `olly_write_memory` is intentionally guarded on the Python side and requires `confirm=True`.
 
-The plugin now also reports native pause metadata from OllyDbg:
-
-- `last_pause_reason`
-- `last_pause_reasonex`
-- `last_pause_eip`
-
-The MCP layer decodes these into:
-
-- `debug_status_name`
-- `pause_info.main`
-- `pause_info.flags`
-- `pause_info.summary`
-
-## Recommended smoke test
+## Smoke Test
 
 Run:
 
 ```powershell
-python .\ollydbg_mcp\test_olly_bridge.py
+python .\test_olly_bridge.py
 ```
 
 Then manually spot-check:
@@ -153,14 +167,14 @@ Then manually spot-check:
 4. `read_memory`
 5. `read_disasm`
 6. `lookup_address`
-7. `set_breakpoint` / `clear_breakpoint`
+7. `set_breakpoint` and `clear_breakpoint`
 
-## Public repo notes
+## Notes
 
-This repository is intentionally source-first:
+- This bridge targets OllyDbg 1.10 specifically, not newer debugger families.
+- The project is most useful for controlled inspection and automation, not as a replacement for a modern debugger.
+- If you publish binaries, prefer GitHub releases or local build output rather than checking them into source control.
 
-- generated Python cache files are excluded
-- local build artifacts such as `.dll`, `.pdb`, `.lib`, and `.o` are excluded
-- machine-specific launch paths are not hardcoded into the checked-in scripts
+## License
 
-If you publish this bridge, keep compiled plugin binaries in local build output or release assets rather than in the main source tree.
+MIT. See [`LICENSE`](./LICENSE).
