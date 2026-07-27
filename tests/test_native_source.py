@@ -38,6 +38,27 @@ def test_native_protocol_identifies_capabilities() -> None:
         "native_wait_for_pause",
         "owner_only_pipe",
         "overlapped_pipe",
+        "ui_thread_dispatch",
         "remote_clients",
     ):
         assert capability in SOURCE
+
+
+def test_debugger_requests_are_marshaled_to_the_ui_thread() -> None:
+    assert "#define OLLYBRIDGE_WM_REQUEST" in SOURCE
+    assert "g_ui_thread_id = GetCurrentThreadId()" in SOURCE
+    assert "static int execute_request_on_ui_thread(" in SOURCE
+    assert "PostMessageA(g_command_window, OLLYBRIDGE_WM_REQUEST" in SOURCE
+    assert "execute_request_on_ui_thread(request, response, sizeof(response))" in SOURCE
+    assert 'respond_error(out, out_size, "wait_for_pause must run on the pipe worker")' in SOURCE
+    assert "static void handle_wait_for_pause_worker(" in SOURCE
+    assert "request[read] = '\\0'; dispatch_request(" not in SOURCE
+
+
+def test_ui_request_buffers_keep_single_owner_until_completion() -> None:
+    assert "InterlockedCompareExchange(&g_exec_request.pending, 1, 0)" in SOURCE
+    assert "InterlockedCompareExchange(&g_bridge_request.pending, 1, 0)" in SOURCE
+    assert "InterlockedExchange(&g_exec_request.pending, 0)" in SOURCE
+    assert "InterlockedExchange(&g_bridge_request.pending, 0)" in SOURCE
+    assert "waits[0] = done_event" in SOURCE
+    assert "waits[1] = g_stop_event" in SOURCE
