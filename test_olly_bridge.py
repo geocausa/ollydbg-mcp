@@ -1,7 +1,5 @@
 """Backward-compatible entry point for the structured runtime smoke test."""
 
-from __future__ import annotations
-
 from ollydbg_mcp.smoke import main
 
 
