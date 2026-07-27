@@ -7,6 +7,7 @@ on:
       - tools/native_patch_protocol.py
       - tools/native_patch_pipe.py
       - tools/native_patch_buffers.py
+      - tools/native_patch_python.py
       - .github/workflows/apply-native-hardening.yml
   pull_request:
     branches: [main]
@@ -14,6 +15,7 @@ on:
       - tools/native_patch_protocol.py
       - tools/native_patch_pipe.py
       - tools/native_patch_buffers.py
+      - tools/native_patch_python.py
       - .github/workflows/apply-native-hardening.yml
 
 permissions:
@@ -40,6 +42,7 @@ jobs:
         run: |
           set -euo pipefail
           source_file=plugin_stub/ollydbg110_bridge.c
+          client_file=ollydbg_mcp/client.py
           if grep -q '#define BRIDGE_PROTOCOL_VERSION 2' "$source_file"; then
             echo "Protocol and pipe hardening already applied"
           else
@@ -51,19 +54,24 @@ jobs:
           else
             python tools/native_patch_buffers.py
           fi
+          if grep -q '"native_wait_for_pause": bool(' "$client_file"; then
+            echo "Native pause client integration already applied"
+          else
+            python tools/native_patch_python.py
+          fi
           git diff --check
-      - name: Commit generated native source when changed
+      - name: Commit generated hardening changes when needed
         shell: bash
         run: |
           set -euo pipefail
           if git diff --quiet; then
-            echo "Native source is already up to date"
+            echo "Generated hardening changes are already up to date"
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add plugin_stub/ollydbg110_bridge.c
-          git commit -m "Bound native bridge response construction"
+          git add plugin_stub/ollydbg110_bridge.c ollydbg_mcp/client.py
+          git commit -m "Use native pause sequencing when available"
           for attempt in 1 2 3; do
             git fetch -q origin native-hardening-v2
             git rebase origin/native-hardening-v2
