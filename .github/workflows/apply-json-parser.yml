@@ -5,11 +5,13 @@ on:
     branches: [json-parser-hardening-v4]
     paths:
       - tools/apply_json_parser.py
+      - tools/apply_json_metadata.py
       - .github/workflows/apply-json-parser.yml
   pull_request:
     branches: [main]
     paths:
       - tools/apply_json_parser.py
+      - tools/apply_json_metadata.py
       - .github/workflows/apply-json-parser.yml
 
 permissions:
@@ -41,6 +43,11 @@ jobs:
           else
             python tools/apply_json_parser.py
           fi
+          if grep -q 'bounded_json_parser' "$source_file"; then
+            echo "Bounded JSON parser metadata already applied"
+          else
+            python tools/apply_json_metadata.py
+          fi
           git diff --check
       - name: Commit generated source when changed
         shell: bash
@@ -53,7 +60,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add plugin_stub/ollydbg110_bridge.c
-          git commit -m "Use the bounded native JSON parser"
+          git commit -m "Advertise the bounded native JSON parser"
           for attempt in 1 2 3; do
             git fetch -q origin json-parser-hardening-v4
             git rebase origin/json-parser-hardening-v4
