@@ -228,17 +228,17 @@ static int execute_on_ui_thread(int command, ulong address, int give_chance) {
     execute_command_now(command, address, give_chance);
     return WAIT_OBJECT_0;
   }
+  if (InterlockedCompareExchange(&g_exec_request.pending, 1, 0) != 0)
+    return WAIT_TIMEOUT;
   ResetEvent(g_exec_request.done_event);
   g_exec_request.command = command;
   g_exec_request.address = address;
   g_exec_request.give_chance = give_chance;
-  InterlockedExchange(&g_exec_request.pending, 1);
   if (!PostMessageA(g_command_window, OLLYBRIDGE_WM_EXEC, 0, 0)) {
     InterlockedExchange(&g_exec_request.pending, 0);
     return WAIT_FAILED;
   }
   wait_result = wait_for_ui_completion(g_exec_request.done_event, 5000);
-  if (wait_result != WAIT_OBJECT_0) InterlockedExchange(&g_exec_request.pending, 0);
   return wait_result;
 }
 
@@ -253,19 +253,17 @@ static int execute_request_on_ui_thread(const char *json, char *out, size_t out_
   }
   request_length = strlen(json);
   if (request_length >= sizeof(g_bridge_request.request)) return 0;
+  if (InterlockedCompareExchange(&g_bridge_request.pending, 1, 0) != 0)
+    return 0;
   ResetEvent(g_bridge_request.done_event);
   memcpy(g_bridge_request.request, json, request_length + 1);
   g_bridge_request.response[0] = '\0';
-  InterlockedExchange(&g_bridge_request.pending, 1);
   if (!PostMessageA(g_command_window, OLLYBRIDGE_WM_REQUEST, 0, 0)) {
     InterlockedExchange(&g_bridge_request.pending, 0);
     return 0;
   }
   wait_result = wait_for_ui_completion(g_bridge_request.done_event, 5000);
-  if (wait_result != WAIT_OBJECT_0) {
-    InterlockedExchange(&g_bridge_request.pending, 0);
-    return 0;
-  }
+  if (wait_result != WAIT_OBJECT_0) return 0;
   strncpy(out, g_bridge_request.response, out_size - 1);
   out[out_size - 1] = '\0';
   return 1;
