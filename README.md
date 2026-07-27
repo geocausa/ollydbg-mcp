@@ -34,6 +34,7 @@ request to the native bridge. Addresses are represented canonically as unsigned
 - module, thread and breakpoint enumeration
 - software and hardware breakpoint management
 - pause, continue, run, step and run-to-address helpers
+- debugger operations marshalled through OllyDbg's UI thread
 - event-driven native pause sequencing with an automatic legacy fallback
 - address lookup, labels and comments
 - guarded debuggee-memory writes
@@ -215,8 +216,8 @@ python -m pytest
 
 The unit tests use a fake transport and do not require OllyDbg. They also assert
 that the native source retains the local-only pipe, interruptible shutdown,
-pause sequencing and bounded response protections. A manual smoke test remains
-available when the plugin is loaded:
+pause sequencing, UI-thread dispatch and bounded response protections. A manual
+smoke test remains available when the plugin is loaded:
 
 ```powershell
 python .\test_olly_bridge.py
@@ -230,7 +231,6 @@ The native bridge remains intentionally small and compatible with OllyDbg 1.10.
 Remaining work includes:
 
 - replacing the minimal field extractor with a complete bounded JSON parser
-- marshalling every OllyDbg API call onto the debugger UI thread
 - adding pagination for unusually large module, thread and breakpoint tables
 - compiling and exercising the DLL in CI when a redistributable SDK-compatible
   build environment is available
