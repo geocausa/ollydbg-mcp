@@ -19,11 +19,12 @@
 #define BREAKPOINT_PAGE_LIMIT 32
 #define MODULE_PAGE_LIMIT 8
 #define THREAD_PAGE_LIMIT 32
+#define PIPE_CLIENT_DRAIN_TIMEOUT_MS 5000
 #define OLLYBRIDGE_WINDOW_CLASS "OllyBridge110Window"
 #define OLLYBRIDGE_WM_EXEC (WM_APP + 0x110)
 #define OLLYBRIDGE_WM_REQUEST (WM_APP + 0x111)
 #define BRIDGE_PROTOCOL_VERSION 2
-#define BRIDGE_PLUGIN_VERSION "2.2"
+#define BRIDGE_PLUGIN_VERSION "2.3"
 #ifndef PIPE_REJECT_REMOTE_CLIENTS
 #define PIPE_REJECT_REMOTE_CLIENTS 0x00000008
 #endif
@@ -433,7 +434,7 @@ static void respond_stateful_error(char *out, size_t out_size, const char *messa
 
 static void handle_status(char *out, size_t out_size) {
   snprintf(out, out_size,
-      "{\"ok\":true,\"protocol_version\":%d,\"plugin_version\":\"%s\",\"pipe\":\"\\\\\\\\.\\\\pipe\\\\OllyBridge110\",\"debug_status\":%d,\"last_pause_reason\":%ld,\"last_pause_reasonex\":%ld,\"last_pause_eip\":\"0x%08lX\",\"pause_sequence\":%ld,\"capabilities\":{\"native_wait_for_pause\":true,\"owner_only_pipe\":true,\"overlapped_pipe\":true,\"ui_thread_dispatch\":true,\"bounded_json_parser\":true,\"paged_tables\":true,\"remote_clients\":false}}\n",
+      "{\"ok\":true,\"protocol_version\":%d,\"plugin_version\":\"%s\",\"pipe\":\"\\\\\\\\.\\\\pipe\\\\OllyBridge110\",\"debug_status\":%d,\"last_pause_reason\":%ld,\"last_pause_reasonex\":%ld,\"last_pause_eip\":\"0x%08lX\",\"pause_sequence\":%ld,\"capabilities\":{\"native_wait_for_pause\":true,\"owner_only_pipe\":true,\"overlapped_pipe\":true,\"ui_thread_dispatch\":true,\"bounded_json_parser\":true,\"paged_tables\":true,\"client_drain_wait\":true,\"remote_clients\":false}}\n",
       BRIDGE_PROTOCOL_VERSION, BRIDGE_PLUGIN_VERSION, (int)g_getstatus(),
       g_last_pause_reason, g_last_pause_reasonex, (ulong)g_last_pause_eip,
       InterlockedCompareExchange(&g_pause_sequence, 0, 0));
@@ -1284,15 +1285,27 @@ static void dispatch_request(const char *json, char *out, size_t out_size) {
   }
 }
 
-static int wait_for_pipe_io(HANDLE pipe, OVERLAPPED *ov, DWORD *done) {
-  HANDLE waits[2]; DWORD wr;
-  waits[0] = g_stop_event; waits[1] = ov->hEvent;
-  wr = WaitForMultipleObjects(2, waits, FALSE, INFINITE);
-  if (wr == WAIT_OBJECT_0) {
-    CancelIo(pipe); WaitForSingleObject(ov->hEvent, 1000); return 0;
+static int wait_for_pipe_io_timeout(
+    HANDLE pipe,
+    OVERLAPPED *ov,
+    DWORD *done,
+    DWORD timeout_ms) {
+  HANDLE waits[2];
+  DWORD wr;
+  waits[0] = g_stop_event;
+  waits[1] = ov->hEvent;
+  wr = WaitForMultipleObjects(2, waits, FALSE, timeout_ms);
+  if (wr == WAIT_OBJECT_0 || wr == WAIT_TIMEOUT) {
+    CancelIo(pipe);
+    WaitForSingleObject(ov->hEvent, 1000);
+    return 0;
   }
   if (wr != WAIT_OBJECT_0 + 1) return 0;
   return GetOverlappedResult(pipe, ov, done, FALSE) != 0;
+}
+
+static int wait_for_pipe_io(HANDLE pipe, OVERLAPPED *ov, DWORD *done) {
+  return wait_for_pipe_io_timeout(pipe, ov, done, INFINITE);
 }
 
 static int connect_pipe_overlapped(HANDLE pipe, OVERLAPPED *ov) {
@@ -1315,6 +1328,20 @@ static int write_pipe_overlapped(HANDLE pipe, const void *buf, DWORD size, DWORD
   if (WriteFile(pipe, buf, size, written, ov)) return 1;
   if (GetLastError() != ERROR_IO_PENDING) return 0;
   return wait_for_pipe_io(pipe, ov, written);
+}
+
+static void wait_for_client_close(HANDLE pipe, OVERLAPPED *ov) {
+  char ignored;
+  DWORD read = 0;
+  DWORD error;
+  ResetEvent(ov->hEvent);
+  if (ReadFile(pipe, &ignored, 1, &read, ov)) return;
+  error = GetLastError();
+  if (error == ERROR_BROKEN_PIPE || error == ERROR_NO_DATA ||
+      error == ERROR_PIPE_NOT_CONNECTED) return;
+  if (error != ERROR_IO_PENDING) return;
+  wait_for_pipe_io_timeout(
+      pipe, ov, &read, PIPE_CLIENT_DRAIN_TIMEOUT_MS);
 }
 
 static DWORD WINAPI pipe_thread_main(LPVOID param) {
@@ -1355,8 +1382,11 @@ static DWORD WINAPI pipe_thread_main(LPVOID param) {
       else if (WaitForSingleObject(g_stop_event, 0) != WAIT_OBJECT_0) {
         respond_error(response, sizeof(response), "Failed to read from pipe");
       }
-      if (response[0] != '\0' && WaitForSingleObject(g_stop_event, 0) != WAIT_OBJECT_0)
-        write_pipe_overlapped(pipe, response, (DWORD)strlen(response), &written, &ov);
+      if (response[0] != '\0' && WaitForSingleObject(g_stop_event, 0) != WAIT_OBJECT_0) {
+        if (write_pipe_overlapped(
+                pipe, response, (DWORD)strlen(response), &written, &ov))
+          wait_for_client_close(pipe, &ov);
+      }
     }
     DisconnectNamedPipe(pipe); CloseHandle(pipe); CloseHandle(ov.hEvent);
   }

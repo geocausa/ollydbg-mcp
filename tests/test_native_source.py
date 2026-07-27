@@ -15,6 +15,15 @@ def test_pipe_is_local_owner_only_and_interruptible() -> None:
     assert "FlushFileBuffers" not in SOURCE
 
 
+def test_pipe_response_waits_for_client_drain() -> None:
+    assert "#define PIPE_CLIENT_DRAIN_TIMEOUT_MS 5000" in SOURCE
+    assert "static int wait_for_pipe_io_timeout(" in SOURCE
+    assert SOURCE.count("static void wait_for_client_close(") == 1
+    assert "error == ERROR_PIPE_NOT_CONNECTED" in SOURCE
+    assert "wait_for_client_close(pipe, &ov);" in SOURCE
+    assert "FlushFileBuffers" not in SOURCE
+
+
 def test_pause_sequence_is_native_and_exported() -> None:
     assert "g_pause_sequence" in SOURCE
     assert 'strcmp(command, "wait_for_pause") == 0' in SOURCE
@@ -64,7 +73,7 @@ def test_native_tables_are_paginated_with_bounded_page_sizes() -> None:
 
 def test_native_protocol_identifies_capabilities() -> None:
     assert "#define BRIDGE_PROTOCOL_VERSION 2" in SOURCE
-    assert "#define BRIDGE_PLUGIN_VERSION \"2.2\"" in SOURCE
+    assert "#define BRIDGE_PLUGIN_VERSION \"2.3\"" in SOURCE
     for capability in (
         "native_wait_for_pause",
         "owner_only_pipe",
@@ -72,6 +81,7 @@ def test_native_protocol_identifies_capabilities() -> None:
         "ui_thread_dispatch",
         "bounded_json_parser",
         "paged_tables",
+        "client_drain_wait",
         "remote_clients",
     ):
         assert capability in SOURCE
