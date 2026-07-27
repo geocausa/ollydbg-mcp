@@ -6,12 +6,14 @@ on:
     paths:
       - tools/native_patch_protocol.py
       - tools/native_patch_pipe.py
+      - tools/native_patch_buffers.py
       - .github/workflows/apply-native-hardening.yml
   pull_request:
     branches: [main]
     paths:
       - tools/native_patch_protocol.py
       - tools/native_patch_pipe.py
+      - tools/native_patch_buffers.py
       - .github/workflows/apply-native-hardening.yml
 
 permissions:
@@ -33,25 +35,29 @@ jobs:
       - name: Apply checked source transformations
         shell: bash
         run: |
-          set +e
-          python tools/native_patch_protocol.py >native-patch.log 2>&1
-          status=$?
-          if [ $status -eq 0 ]; then
-            python tools/native_patch_pipe.py >>native-patch.log 2>&1
-            status=$?
+          set -euo pipefail
+          source_file=plugin_stub/ollydbg110_bridge.c
+          if grep -q '#define BRIDGE_PROTOCOL_VERSION 2' "$source_file"; then
+            echo "Protocol and pipe hardening already applied"
+          else
+            python tools/native_patch_protocol.py
+            python tools/native_patch_pipe.py
           fi
-          cat native-patch.log
-          exit $status
-      - name: Validate and commit generated native source
+          if grep -q 'static int append_format(' "$source_file"; then
+            echo "Bounded response builder already applied"
+          else
+            python tools/native_patch_buffers.py
+          fi
+          git diff --check
+      - name: Commit generated native source when changed
         shell: bash
         run: |
-          git diff --check
           if git diff --quiet; then
-            echo "No native source changes were produced"
-            exit 1
+            echo "Native source is already up to date"
+            exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add plugin_stub/ollydbg110_bridge.c
-          git commit -m "Harden native pipe and pause protocol"
+          git commit -m "Bound native bridge response construction"
           git push origin HEAD:native-hardening-v2
