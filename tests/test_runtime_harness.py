@@ -66,8 +66,9 @@ def test_launcher_keeps_existing_behaviour_with_optional_smoke_inputs() -> None:
     assert "OLLYBRIDGE_ALLOW_MUTATIONS" in LAUNCHER
     assert "Join-Path $workspacePath 'OllyBridge110.dll'" in LAUNCHER
     assert "if (!$SkipServer)" in LAUNCHER
-    assert LAUNCHER.index("Get-Process -Name OLLYDBG") < LAUNCHER.index("Copy-Item -LiteralPath $iniPath")
-    assert LAUNCHER.index("Get-Process -Name OLLYDBG") < LAUNCHER.index("Copy-Item -LiteralPath $resolvedPluginDll")
+    process_check = LAUNCHER.index("Get-Process -Name OLLYDBG")
+    assert process_check < LAUNCHER.index("Copy-Item -LiteralPath $iniPath")
+    assert process_check < LAUNCHER.index("Copy-Item -LiteralPath $resolvedPluginDll")
     assert "OllyDbg did not stop within 10 seconds" in LAUNCHER
     assert "MCP server launch skipped." in LAUNCHER
 
