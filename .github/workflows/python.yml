@@ -38,9 +38,6 @@ jobs:
   native-dll:
     runs-on: windows-latest
     steps:
-      - uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x86
       - name: Fetch exact commit quietly
         shell: powershell
         run: |
@@ -49,12 +46,16 @@ jobs:
           git fetch -q --depth=1 origin $env:GITHUB_SHA
           git checkout -q FETCH_HEAD
       - name: Compile, link and inspect the 32-bit DLL
-        shell: powershell
+        shell: cmd
         run: |
-          .\plugin_stub\build_plugin.ps1 `
-            -SdkDir .\tests\ollydbg_sdk_stub `
-            -OutputDir .\build\native-ci `
-            -AllowTestSdk
+          @echo off
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSINSTALL=%%i"
+          if not defined VSINSTALL (
+            echo Visual Studio C++ tools were not found.
+            exit /b 1
+          )
+          call "%VSINSTALL%\VC\Auxiliary\Build\vcvarsall.bat" x86 >nul
+          powershell -NoProfile -ExecutionPolicy Bypass -File .\plugin_stub\build_plugin.ps1 -SdkDir .\tests\ollydbg_sdk_stub -OutputDir .\build\native-ci -AllowTestSdk
       - name: Remove the test-only DLL
         if: always()
         shell: powershell
