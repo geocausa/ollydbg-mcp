@@ -105,6 +105,24 @@ def test_hardware_breakpoints_are_validated_before_api_calls() -> None:
     assert "index >= 0 && index < 4" not in clear_source
 
 
+def test_execution_results_are_validated_without_shortcut_fallbacks() -> None:
+    assert "fn_sendshortcut_t" not in SOURCE
+    assert "g_sendshortcut" not in SOURCE
+    assert "dispatch_main_key" not in SOURCE
+    assert "handle_step_shortcut" not in SOURCE
+    assert "static void handle_step(" in SOURCE
+    step_start = SOURCE.index("static void handle_step(")
+    step_end = SOURCE.index("static void handle_continue(")
+    step_source = SOURCE[step_start:step_end]
+    assert "g_exec_request.result != 0" in step_source
+    assert 'respond_stateful_error(out, out_size, "Step failed")' in step_source
+    continue_start = SOURCE.index("static void handle_continue(")
+    continue_end = SOURCE.index("static void handle_pause(")
+    continue_source = SOURCE[continue_start:continue_end]
+    assert "g_exec_request.result != 0" in continue_source
+    assert 'respond_stateful_error(out, out_size, "Continue failed")' in continue_source
+
+
 def test_native_tables_are_paginated_with_bounded_page_sizes() -> None:
     assert "#define BREAKPOINT_PAGE_LIMIT 32" in SOURCE
     assert "#define MODULE_PAGE_LIMIT 8" in SOURCE
@@ -123,7 +141,7 @@ def test_native_tables_are_paginated_with_bounded_page_sizes() -> None:
 
 def test_native_protocol_identifies_capabilities() -> None:
     assert "#define BRIDGE_PROTOCOL_VERSION 2" in SOURCE
-    assert "#define BRIDGE_PLUGIN_VERSION \"2.5\"" in SOURCE
+    assert "#define BRIDGE_PLUGIN_VERSION \"2.6\"" in SOURCE
     for capability in (
         "native_wait_for_pause",
         "owner_only_pipe",
@@ -135,6 +153,7 @@ def test_native_protocol_identifies_capabilities() -> None:
         "mutation_gate",
         "strict_native_values",
         "hardware_breakpoint_validation",
+        "execution_result_validation",
         "remote_clients",
     ):
         assert capability in SOURCE

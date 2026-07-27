@@ -23,7 +23,7 @@ class FakeSmokeClient:
         return {
             "ok": True,
             "protocol_version": 2,
-            "plugin_version": "2.5",
+            "plugin_version": "2.6",
             "mutations_enabled": self.mutations_enabled,
             "debug_status": 2,
             "debug_status_name": "event",
@@ -38,6 +38,7 @@ class FakeSmokeClient:
                 "mutation_gate": True,
                 "strict_native_values": True,
                 "hardware_breakpoint_validation": True,
+                "execution_result_validation": True,
                 "remote_clients": False,
             },
         }

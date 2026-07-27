@@ -150,6 +150,11 @@ class OllyBridgeClient:
                         "hardware_breakpoint_validation"
                     )
                 ),
+                "execution_result_validation": bool(
+                    status.get("capabilities", {}).get(
+                        "execution_result_validation"
+                    )
+                ),
                 "atomic_snapshot": False,
             },
         }

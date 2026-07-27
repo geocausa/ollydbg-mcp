@@ -24,6 +24,7 @@ REQUIRED_NATIVE_CAPABILITIES = (
     "mutation_gate",
     "strict_native_values",
     "hardware_breakpoint_validation",
+    "execution_result_validation",
 )
 
 
