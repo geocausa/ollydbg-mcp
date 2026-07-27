@@ -66,7 +66,17 @@ def test_launcher_keeps_existing_behaviour_with_optional_smoke_inputs() -> None:
     assert "OLLYBRIDGE_ALLOW_MUTATIONS" in LAUNCHER
     assert "Join-Path $workspacePath 'OllyBridge110.dll'" in LAUNCHER
     assert "if (!$SkipServer)" in LAUNCHER
+    assert LAUNCHER.index("Get-Process -Name OLLYDBG") < LAUNCHER.index("Copy-Item -LiteralPath $iniPath")
+    assert LAUNCHER.index("Get-Process -Name OLLYDBG") < LAUNCHER.index("Copy-Item -LiteralPath $resolvedPluginDll")
+    assert "OllyDbg did not stop within 10 seconds" in LAUNCHER
     assert "MCP server launch skipped." in LAUNCHER
+
+
+def test_execution_smoke_only_steps_after_reaching_probe() -> None:
+    assert SMOKE.index("if reached_probe:") < SMOKE.index('"step_from_probe"')
+    assert "skipped because run_to_probe did not reach the probe" in SMOKE
+    assert "_little_endian_u32_hex" in SMOKE
+    assert "timeout_seconds=transport.timeout_seconds" in SMOKE
 
 
 def test_smoke_command_and_ci_target_build_are_registered() -> None:

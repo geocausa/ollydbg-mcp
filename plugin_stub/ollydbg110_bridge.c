@@ -25,7 +25,7 @@
 #define OLLYBRIDGE_WM_EXEC (WM_APP + 0x110)
 #define OLLYBRIDGE_WM_REQUEST (WM_APP + 0x111)
 #define BRIDGE_PROTOCOL_VERSION 2
-#define BRIDGE_PLUGIN_VERSION "2.6"
+#define BRIDGE_PLUGIN_VERSION "2.7"
 #ifndef PIPE_REJECT_REMOTE_CLIENTS
 #define PIPE_REJECT_REMOTE_CLIENTS 0x00000008
 #endif
@@ -43,7 +43,7 @@ typedef t_module *(cdecl *fn_findmodule_t)(ulong addr);
 typedef int (cdecl *fn_setbreakpoint_t)(ulong addr, ulong type, uchar cmd);
 typedef void (cdecl *fn_deletebreakpoints_t)(ulong addr0, ulong addr1, int silent);
 typedef int (cdecl *fn_sethardwarebreakpoint_t)(ulong addr, int size, int type);
-typedef int (cdecl *fn_deletehardwarebreakpoint_t)(int index);
+typedef int (cdecl *fn_deletehardwarebreakbyaddr_t)(ulong address);
 typedef int (cdecl *fn_insertname_t)(ulong addr, int type, char *name);
 typedef int (cdecl *fn_go_t)(ulong threadid, ulong tilladdr, int stepmode, int givechance, int backupregs);
 typedef t_status (cdecl *fn_getstatus_t)(void);
@@ -109,7 +109,7 @@ static fn_findmodule_t g_findmodule = NULL;
 static fn_setbreakpoint_t g_setbreakpoint = NULL;
 static fn_deletebreakpoints_t g_deletebreakpoints = NULL;
 static fn_sethardwarebreakpoint_t g_sethardwarebreakpoint = NULL;
-static fn_deletehardwarebreakpoint_t g_deletehardwarebreakpoint = NULL;
+static fn_deletehardwarebreakbyaddr_t g_deletehardwarebreakbyaddr = NULL;
 static fn_insertname_t g_insertname = NULL;
 static fn_go_t g_go = NULL;
 static fn_getstatus_t g_getstatus = NULL;
@@ -137,7 +137,7 @@ static int bind_exports(void) {
   g_setbreakpoint = (fn_setbreakpoint_t)resolve_export("_Setbreakpoint");
   g_deletebreakpoints = (fn_deletebreakpoints_t)resolve_export("_Deletebreakpoints");
   g_sethardwarebreakpoint = (fn_sethardwarebreakpoint_t)resolve_export("_Sethardwarebreakpoint");
-  g_deletehardwarebreakpoint = (fn_deletehardwarebreakpoint_t)resolve_export("_Deletehardwarebreakpoint");
+  g_deletehardwarebreakbyaddr = (fn_deletehardwarebreakbyaddr_t)resolve_export("_Deletehardwarebreakbyaddr");
   g_insertname = (fn_insertname_t)resolve_export("_Insertname");
   g_go = (fn_go_t)resolve_export("_Go");
   g_getstatus = (fn_getstatus_t)resolve_export("_Getstatus");
@@ -148,7 +148,7 @@ static int bind_exports(void) {
          g_getcputhreadid != NULL && g_findthread != NULL &&
          g_findmemory != NULL && g_findmodule != NULL &&
          g_setbreakpoint != NULL && g_deletebreakpoints != NULL &&
-         g_sethardwarebreakpoint != NULL && g_deletehardwarebreakpoint != NULL &&
+         g_sethardwarebreakpoint != NULL && g_deletehardwarebreakbyaddr != NULL &&
          g_insertname != NULL && g_go != NULL && g_getstatus != NULL &&
          g_suspendprocess != NULL;
 }
@@ -399,6 +399,15 @@ static int command_requires_mutation(const char *command) {
          strcmp(command, "set_comment") == 0;
 }
 
+static void reset_debuggee_state(void) {
+  memset(g_hardware_breakpoints, 0, sizeof(g_hardware_breakpoints));
+  memset(g_hardware_breakpoints_valid, 0, sizeof(g_hardware_breakpoints_valid));
+  InterlockedExchange(&g_last_pause_reason, 0);
+  InterlockedExchange(&g_last_pause_reasonex, 0);
+  g_last_pause_eip = 0;
+  if (g_pause_event != NULL) ResetEvent(g_pause_event);
+}
+
 static void respond_error(char *out, size_t out_size, const char *message) {
   char escaped[512];
   size_t used = 0;
@@ -428,7 +437,7 @@ static void handle_status(char *out, size_t out_size) {
   LONG mutations_enabled =
       InterlockedCompareExchange(&g_mutations_enabled, 0, 0);
   snprintf(out, out_size,
-      "{\"ok\":true,\"protocol_version\":%d,\"plugin_version\":\"%s\",\"pipe\":\"\\\\\\\\.\\\\pipe\\\\OllyBridge110\",\"debug_status\":%d,\"last_pause_reason\":%ld,\"last_pause_reasonex\":%ld,\"last_pause_eip\":\"0x%08lX\",\"pause_sequence\":%ld,\"mutations_enabled\":%s,\"capabilities\":{\"native_wait_for_pause\":true,\"owner_only_pipe\":true,\"overlapped_pipe\":true,\"ui_thread_dispatch\":true,\"bounded_json_parser\":true,\"paged_tables\":true,\"client_drain_wait\":true,\"mutation_gate\":true,\"strict_native_values\":true,\"hardware_breakpoint_validation\":true,\"execution_result_validation\":true,\"remote_clients\":false}}\n",
+      "{\"ok\":true,\"protocol_version\":%d,\"plugin_version\":\"%s\",\"pipe\":\"\\\\\\\\.\\\\pipe\\\\OllyBridge110\",\"debug_status\":%d,\"last_pause_reason\":%ld,\"last_pause_reasonex\":%ld,\"last_pause_eip\":\"0x%08lX\",\"pause_sequence\":%ld,\"mutations_enabled\":%s,\"capabilities\":{\"native_wait_for_pause\":true,\"owner_only_pipe\":true,\"overlapped_pipe\":true,\"ui_thread_dispatch\":true,\"bounded_json_parser\":true,\"paged_tables\":true,\"client_drain_wait\":true,\"mutation_gate\":true,\"strict_native_values\":true,\"hardware_breakpoint_validation\":true,\"execution_result_validation\":true,\"hardware_breakpoint_address_delete\":true,\"debuggee_reset\":true,\"remote_clients\":false}}\n",
       BRIDGE_PROTOCOL_VERSION, BRIDGE_PLUGIN_VERSION, (int)g_getstatus(),
       g_last_pause_reason, g_last_pause_reasonex, (ulong)g_last_pause_eip,
       InterlockedCompareExchange(&g_pause_sequence, 0, 0),
@@ -815,8 +824,8 @@ static void handle_clear_hardware_breakpoint(const char *json, char *out, size_t
     respond_error(out, out_size, "Hardware breakpoint slot is not tracked by this plugin");
     return;
   }
-  if (g_deletehardwarebreakpoint(index) != 0) {
-    respond_error(out, out_size, "Deletehardwarebreakpoint failed");
+  if (g_deletehardwarebreakbyaddr(g_hardware_breakpoints[index].addr) != 0) {
+    respond_error(out, out_size, "Deletehardwarebreakbyaddr failed");
     return;
   }
   g_hardware_breakpoints_valid[index] = 0;
@@ -1479,6 +1488,7 @@ extc __declspec(dllexport) int cdecl _ODBG_Plugininit(int ollydbgversion, HWND h
     CloseHandle(g_exec_request.done_event); g_exec_request.done_event = NULL;
     DestroyWindow(g_command_window); g_command_window = NULL; return -1;
   }
+  reset_debuggee_state();
   log_line("OllyBridge110 plugin loaded");
   log_line(InterlockedCompareExchange(&g_mutations_enabled, 0, 0)
       ? "  Native mutations: enabled"
@@ -1525,6 +1535,10 @@ extc __declspec(dllexport) void cdecl _ODBG_Pluginaction(int origin, int action,
     snprintf(message, sizeof(message), "OllyBridge110: %s", InterlockedCompareExchange(&g_running, 0, 0) ? "pipe thread running" : "pipe thread stopped");
     log_line(message);
   }
+}
+
+extc __declspec(dllexport) void cdecl _ODBG_Pluginreset(void) {
+  reset_debuggee_state();
 }
 
 extc __declspec(dllexport) int cdecl _ODBG_Pluginclose(void) {

@@ -155,6 +155,16 @@ class OllyBridgeClient:
                         "execution_result_validation"
                     )
                 ),
+                "hardware_breakpoint_address_delete": bool(
+                    status.get("capabilities", {}).get(
+                        "hardware_breakpoint_address_delete"
+                    )
+                ),
+                "debuggee_reset": bool(
+                    status.get("capabilities", {}).get("debuggee_reset")
+                ),
+                "command_aware_retries": True,
+                "strict_response_utf8": True,
                 "atomic_snapshot": False,
             },
         }

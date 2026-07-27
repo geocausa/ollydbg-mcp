@@ -93,6 +93,9 @@ def test_hardware_breakpoints_are_validated_before_api_calls() -> None:
     assert "No free tracked hardware breakpoint slot" in SOURCE
     assert "Hardware breakpoint index must be between 0 and 3" in SOURCE
     assert "Hardware breakpoint slot is not tracked by this plugin" in SOURCE
+    assert "_Deletehardwarebreakbyaddr" in SOURCE
+    assert "g_deletehardwarebreakpoint" not in SOURCE
+    assert "g_deletehardwarebreakbyaddr(g_hardware_breakpoints[index].addr)" in SOURCE
     assert SOURCE.index("if (slot >= 4)") < SOURCE.index(
         "result = g_sethardwarebreakpoint(address, size, type);"
     )
@@ -141,7 +144,7 @@ def test_native_tables_are_paginated_with_bounded_page_sizes() -> None:
 
 def test_native_protocol_identifies_capabilities() -> None:
     assert "#define BRIDGE_PROTOCOL_VERSION 2" in SOURCE
-    assert "#define BRIDGE_PLUGIN_VERSION \"2.6\"" in SOURCE
+    assert "#define BRIDGE_PLUGIN_VERSION \"2.7\"" in SOURCE
     for capability in (
         "native_wait_for_pause",
         "owner_only_pipe",
@@ -154,9 +157,19 @@ def test_native_protocol_identifies_capabilities() -> None:
         "strict_native_values",
         "hardware_breakpoint_validation",
         "execution_result_validation",
+        "hardware_breakpoint_address_delete",
+        "debuggee_reset",
         "remote_clients",
     ):
         assert capability in SOURCE
+
+
+def test_debuggee_reset_clears_bridge_owned_session_state() -> None:
+    assert "static void reset_debuggee_state(void)" in SOURCE
+    assert "memset(g_hardware_breakpoints_valid, 0" in SOURCE
+    assert "InterlockedExchange(&g_last_pause_reasonex, 0)" in SOURCE
+    assert "_ODBG_Pluginreset" in SOURCE
+    assert "_ODBG_Pluginreset" in EXPORTS
 
 
 def test_debugger_requests_are_marshaled_to_the_ui_thread() -> None:

@@ -11,8 +11,16 @@ from ollydbg_mcp.smoke import SmokeManifest, run_smoke, wait_for_connection
 
 
 class FakeSmokeClient:
-    def __init__(self, *, mutations_enabled: bool = True) -> None:
+    def __init__(
+        self,
+        *,
+        mutations_enabled: bool = True,
+        run_succeeds: bool = True,
+        counter_hex: str = "44332211",
+    ) -> None:
         self.mutations_enabled = mutations_enabled
+        self.run_succeeds = run_succeeds
+        self.counter_hex = counter_hex
         self.breakpoints: set[str] = set()
         self.set_calls: list[str] = []
         self.clear_calls: list[str] = []
@@ -23,7 +31,7 @@ class FakeSmokeClient:
         return {
             "ok": True,
             "protocol_version": 2,
-            "plugin_version": "2.6",
+            "plugin_version": "2.7",
             "mutations_enabled": self.mutations_enabled,
             "debug_status": 2,
             "debug_status_name": "event",
@@ -39,6 +47,8 @@ class FakeSmokeClient:
                 "strict_native_values": True,
                 "hardware_breakpoint_validation": True,
                 "execution_result_validation": True,
+                "hardware_breakpoint_address_delete": True,
+                "debuggee_reset": True,
                 "remote_clients": False,
             },
         }
@@ -86,9 +96,13 @@ class FakeSmokeClient:
     def snapshot(stack_size: int = 64, disasm_count: int = 8) -> dict[str, Any]:
         return {"ok": True, "stack_size": stack_size, "disasm_count": disasm_count}
 
-    @staticmethod
-    def read_memory(address: str | int, size: int) -> dict[str, Any]:
-        return {"ok": True, "address": str(address), "size": size, "hex": "44332211"}
+    def read_memory(self, address: str | int, size: int) -> dict[str, Any]:
+        return {
+            "ok": True,
+            "address": str(address),
+            "size": size,
+            "hex": self.counter_hex,
+        }
 
     @staticmethod
     def read_disasm(address: str | int, count: int = 8) -> dict[str, Any]:
@@ -123,6 +137,8 @@ class FakeSmokeClient:
     ) -> dict[str, Any]:
         canonical = str(address)
         self.run_calls.append(canonical)
+        if not self.run_succeeds:
+            return {"ok": False, "eip": {"eip": "0x00401000"}}
         return {"ok": True, "eip": {"eip": canonical}}
 
     def step_into(self) -> dict[str, Any]:
@@ -243,6 +259,25 @@ def test_execution_smoke_is_explicit_and_reaches_probe() -> None:
     assert report["ok"] is True
     assert client.run_calls == ["0x00401100"]
     assert client.step_calls == 1
+
+
+def test_execution_smoke_does_not_step_when_probe_was_not_reached() -> None:
+    client = FakeSmokeClient(run_succeeds=False)
+
+    report = run_smoke(client, manifest(), allow_execution=True)
+
+    assert report["ok"] is False
+    assert client.step_calls == 0
+    assert check_by_name(report, "step_from_probe")["details"]["skipped"] is True
+
+
+def test_counter_initial_value_is_verified() -> None:
+    client = FakeSmokeClient(counter_hex="00000000")
+
+    report = run_smoke(client, manifest())
+
+    assert report["ok"] is False
+    assert check_by_name(report, "counter_memory")["ok"] is False
 
 
 def test_manifest_address_outside_module_fails_without_stopping_other_checks() -> None:

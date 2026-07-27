@@ -102,6 +102,7 @@ $requiredExports = @(
     "_ODBG_Plugininit",
     "_ODBG_Pluginmenu",
     "_ODBG_Pluginaction",
+    "_ODBG_Pluginreset",
     "_ODBG_Pluginclose",
     "_ODBG_Paused",
     "_ODBG_Pausedex",

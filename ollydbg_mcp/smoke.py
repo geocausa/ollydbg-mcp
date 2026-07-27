@@ -25,6 +25,8 @@ REQUIRED_NATIVE_CAPABILITIES = (
     "strict_native_values",
     "hardware_breakpoint_validation",
     "execution_result_validation",
+    "hardware_breakpoint_address_delete",
+    "debuggee_reset",
 )
 
 
@@ -140,6 +142,11 @@ def _breakpoint_addresses(body: dict[str, Any]) -> set[str]:
     return addresses
 
 
+def _little_endian_u32_hex(value: str) -> str:
+    numeric = int(normalize_address(value), 16)
+    return numeric.to_bytes(4, "little").hex().upper()
+
+
 def run_smoke(
     client: SmokeClient,
     manifest: SmokeManifest | None = None,
@@ -235,12 +242,21 @@ def run_smoke(
             and _address_in_module(body["probe_address"], body["module"])
             and _address_in_module(body["counter_address"], body["module"]),
         )
+        expected_counter_hex = (
+            _little_endian_u32_hex(manifest.counter_initial_value)
+            if manifest.counter_initial_value is not None
+            else None
+        )
         capture(
             "counter_memory",
             lambda: client.read_memory(manifest.counter_address, 4),
             lambda body: body.get("ok") is True
             and isinstance(body.get("hex"), str)
-            and len(body["hex"]) == 8,
+            and len(body["hex"]) == 8
+            and (
+                expected_counter_hex is None
+                or body["hex"].upper() == expected_counter_hex
+            ),
         )
         capture(
             "probe_disassembly",
@@ -303,7 +319,7 @@ def run_smoke(
                         )
 
         if allow_execution:
-            capture(
+            run_to_probe = capture(
                 "run_to_probe",
                 lambda: client.run_to_address(
                     manifest.probe_address,
@@ -314,11 +330,30 @@ def run_smoke(
                 and normalize_address(body.get("eip", {}).get("eip"))
                 == manifest.probe_address,
             )
-            capture(
-                "step_from_probe",
-                client.step_into,
-                lambda body: body.get("ok") is True and body.get("moved") is True,
-            )
+            reached_probe = False
+            if isinstance(run_to_probe, dict) and run_to_probe.get("ok") is True:
+                try:
+                    reached_probe = (
+                        normalize_address(run_to_probe.get("eip", {}).get("eip"))
+                        == manifest.probe_address
+                    )
+                except (TypeError, ValueError):
+                    reached_probe = False
+            if reached_probe:
+                capture(
+                    "step_from_probe",
+                    client.step_into,
+                    lambda body: body.get("ok") is True and body.get("moved") is True,
+                )
+            else:
+                checks.append(
+                    SmokeCheck(
+                        name="step_from_probe",
+                        ok=False,
+                        details={"skipped": True},
+                        error="skipped because run_to_probe did not reach the probe",
+                    )
+                )
 
     return {
         "ok": all(check.ok for check in checks),
@@ -368,7 +403,11 @@ def main(argv: list[str] | None = None) -> int:
             timeout_seconds=min(max(args.timeout, 0.05), 5.0),
             retries=1,
         )
-        client = OllyBridgeClient(transport=transport, pipe_name=args.pipe_name)
+        client = OllyBridgeClient(
+            transport=transport,
+            pipe_name=args.pipe_name,
+            timeout_seconds=transport.timeout_seconds,
+        )
         wait_for_connection(client, args.timeout)
         report = run_smoke(
             client,
