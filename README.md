@@ -1,180 +1,233 @@
 # OllyDbg MCP Bridge
 
-An MCP bridge for **OllyDbg 1.10** that lets an MCP client inspect and lightly control the debugger through a small plugin and a Python server.
+An MCP bridge for **OllyDbg 1.10**. It connects an MCP client to a small native
+OllyDbg plugin over a local Windows named pipe.
 
-The project is split into two parts:
-
-- a native OllyDbg plugin that exposes a named pipe at `\\.\pipe\OllyBridge110`
-- a Python MCP server that translates tool calls into pipe requests and JSON responses
-
-This repo is source-first. Compiled binaries, caches, and machine-specific paths are intentionally excluded.
-
-## Features
-
-- debugger status, pause metadata, and current instruction helpers
-- register, memory, stack, and disassembly reads
-- module, thread, and breakpoint enumeration
-- software and hardware breakpoint helpers
-- basic execution controls such as pause, continue, run, and step helpers
-- address lookup and light session cleanup helpers
-
-## Repository Layout
-
-- `server.py`
-  Python MCP server
-- `start_olly_bridge.ps1`
-  Convenience launcher for local testing
-- `test_olly_bridge.py`
-  Small smoke test for the Python side
-- `plugin_stub/ollydbg110_bridge.c`
-  OllyDbg 1.10 plugin bridge source
-- `plugin_stub/OllyBridge110.def`
-  Export definition file for the plugin
+The repository is source-first. Compiled DLLs, SDK files, caches, samples and
+machine-specific paths are intentionally excluded.
 
 ## Architecture
 
-1. An MCP client calls a tool exposed by `server.py`.
-2. The server sends a JSON request over `\\.\pipe\OllyBridge110`.
-3. The OllyDbg plugin performs the debugger action on the UI/debugger side.
-4. The plugin returns JSON back through the pipe.
+```text
+MCP client
+    |
+    | stdio / streamable HTTP / SSE
+    v
+Python MCP server
+    |
+    | JSON over \\.\pipe\OllyBridge110
+    v
+OllyDbg 1.10 plugin
+    |
+    v
+OllyDbg debugger APIs
+```
+
+The Python package validates and normalizes tool arguments before sending a
+request to the native bridge. Addresses are represented canonically as unsigned
+32-bit hexadecimal values such as `0x00401000`.
+
+## Features
+
+- debugger status and decoded pause metadata
+- register, memory, stack and disassembly reads
+- module, thread and breakpoint enumeration
+- software and hardware breakpoint management
+- pause, continue, run, step and run-to-address helpers
+- address lookup, labels and comments
+- guarded debuggee-memory writes
+- combined debugger snapshots
+- bridge capability reporting
+- bounded local named-pipe waits and serialized requests
+
+## Safety defaults
+
+Operations that can unexpectedly destroy debugger state require explicit
+confirmation:
+
+- `olly_write_memory(..., confirm=true)`
+- `olly_clear_all_breakpoints(confirm=true)`
+- `olly_prepare_session(clear_breakpoints=true, confirm_clear=true)`
+
+Session preparation no longer clears breakpoints by default.
+
+The confirmation checks are enforced by the Python MCP server. The current
+native plugin protocol is local-only but does not yet implement authentication.
+Do not expose the MCP server or named pipe to untrusted users.
 
 ## Requirements
 
 - Windows
-- Python 3
-- the Python `mcp` package
+- Python 3.10 or newer
 - OllyDbg 1.10
-- the OllyDbg 1.10 plugin SDK headers and import libraries needed to build a plugin
+- a 32-bit C compiler compatible with the OllyDbg 1.10 plugin SDK
+- the OllyDbg 1.10 `Plugin.h` header and import environment
 
-## Building the Plugin
+The Python dependency is pinned to the compatible MCP Python SDK v1 line until
+the project is deliberately migrated to SDK v2.
 
-The source lives in [`plugin_stub/ollydbg110_bridge.c`](./plugin_stub/ollydbg110_bridge.c).
-
-Build an `OllyBridge110.dll` against the OllyDbg 1.10 SDK using your preferred Windows C toolchain. The resulting DLL should be copied into the plugin directory configured in `ollydbg.ini`.
-
-At a minimum, the build needs to:
-
-- include the OllyDbg 1.10 SDK headers such as `Plugin.h`
-- export the expected plugin entry points
-- produce a 32-bit DLL compatible with OllyDbg 1.10
-
-The plugin uses real OllyDbg 1.10 APIs including:
-
-- `ODBG_Plugindata`
-- `ODBG_Plugininit`
-- `ODBG_Pluginmenu`
-- `ODBG_Pluginaction`
-- `Readmemory`
-- `Writememory`
-- `Disasm`
-- `Setcpu`
-- `Plugingetvalue(...)`
-
-## Running the Server
+## Install the Python server
 
 From the repository root:
+
+```powershell
+py -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
+python -m pip install -e .
+```
+
+Run it through the installed console command:
+
+```powershell
+ollydbg-mcp --transport stdio
+```
+
+The source-checkout entry point remains available:
 
 ```powershell
 python .\server.py --transport stdio
 ```
 
-You can also use the helper launcher:
+Optional configuration:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\start_olly_bridge.ps1 -OllyDir 'C:\Path\To\OllyDbg' -PluginDir 'C:\Path\To\OllyPlugins'
+$env:OLLYDBG_PIPE_NAME = '\\.\pipe\OllyBridge110'
+$env:OLLYDBG_TIMEOUT_SECONDS = '5'
 ```
 
-By default the Python side expects:
+Equivalent command-line options are available:
+
+```powershell
+ollydbg-mcp --pipe-name '\\.\pipe\OllyBridge110' --timeout 5
+```
+
+## Build the plugin
+
+The native source lives at:
 
 ```text
-\\.\pipe\OllyBridge110
+plugin_stub/ollydbg110_bridge.c
 ```
 
-You can override the defaults with environment variables:
+Build a 32-bit `OllyBridge110.dll` against the OllyDbg 1.10 SDK. The build must:
 
-- `OLLYDBG_PIPE_NAME`
-- `OLLYDBG_BRIDGE_URL`
+- include the SDK `Plugin.h`
+- use the structure packing and unsigned-character settings required by the SDK
+- export the OllyDbg plugin entry points
+- produce a 32-bit DLL
 
-## Exposed Tool Surface
+Copy the DLL into the plugin directory configured by `ollydbg.ini` and restart
+OllyDbg.
 
-Current tools include:
+## Safer launcher
+
+The helper script validates paths, backs up `ollydbg.ini` before changing its
+plugin path and does not terminate an existing OllyDbg process unless
+`-RestartOlly` is explicitly supplied.
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\start_olly_bridge.ps1 `
+  -OllyDir 'C:\Tools\OllyDbg' `
+  -PluginDir 'C:\Tools\OllyDbg\Plugins' `
+  -RestartOlly
+```
+
+Pass `-TargetExe` to open a specific executable.
+
+## MCP tools
+
+Inspection:
 
 - `olly_status`
-- `olly_goto_address`
-- `olly_read_memory`
-- `olly_read_disasm`
+- `olly_get_capabilities`
+- `olly_snapshot`
 - `olly_get_registers`
 - `olly_get_eip`
 - `olly_current_instruction`
-- `olly_goto_eip`
+- `olly_read_memory`
+- `olly_read_disasm`
 - `olly_read_stack`
 - `olly_disasm_from_stack`
-- `olly_write_memory`
 - `olly_lookup_address`
-- `olly_list_breakpoints`
 - `olly_list_modules`
 - `olly_list_threads`
-- `olly_set_breakpoint`
-- `olly_clear_breakpoint`
-- `olly_set_hardware_breakpoint`
-- `olly_clear_hardware_breakpoint`
+- `olly_list_breakpoints`
 - `olly_list_hardware_breakpoints`
+
+Navigation and metadata:
+
+- `olly_goto_address`
+- `olly_goto_eip`
 - `olly_set_label`
 - `olly_set_comment`
+
+Breakpoints and mutation:
+
+- `olly_set_breakpoint`
+- `olly_clear_breakpoint`
+- `olly_clear_all_breakpoints`
+- `olly_set_hardware_breakpoint`
+- `olly_clear_hardware_breakpoint`
+- `olly_write_memory`
+
+Execution:
+
 - `olly_run`
+- `olly_run_to_address`
 - `olly_step_into`
 - `olly_step_over`
 - `olly_pause`
 - `olly_continue`
-- `olly_run_to_address`
-- `olly_clear_all_breakpoints`
+- `olly_wait_for_pause`
 - `olly_prepare_session`
 
-## Stability Notes
+## Validation limits
 
-Most reliable in testing:
+The Python boundary currently enforces:
 
-- status and pause metadata
-- register, stack, memory, and disassembly reads
-- module, thread, and address lookup helpers
-- software breakpoint management
-- hardware breakpoint tracking through the bridge
-- pause and clean session preparation
+- addresses from `0x00000000` through `0xFFFFFFFF`
+- memory reads and writes of at most 1024 bytes
+- disassembly requests of at most 32 instructions
+- hardware breakpoint indexes from 0 through 3
+- execute hardware breakpoints of one byte
+- aligned two-byte and four-byte data breakpoints
+- operation timeouts of at most 300 seconds
 
-Less reliable, especially around unusual target states or packed samples:
+## Testing
 
-- `olly_run` reporting right around startup
-- `olly_step_into`
-- `olly_step_over`
-- `olly_set_label`
-- `olly_set_comment`
+Install development dependencies and run:
 
-`olly_write_memory` is intentionally guarded on the Python side and requires `confirm=True`.
+```powershell
+python -m pip install -e '.[dev]'
+python -m ruff check .
+python -m pytest
+```
 
-## Smoke Test
-
-Run:
+The unit tests use a fake transport and do not require OllyDbg. A manual smoke
+test remains available when the plugin is loaded:
 
 ```powershell
 python .\test_olly_bridge.py
 ```
 
-Then manually spot-check:
+GitHub Actions runs linting and unit tests on Windows with Python 3.10 and 3.12.
 
-1. `status`
-2. `get_eip`
-3. `current_instruction`
-4. `read_memory`
-5. `read_disasm`
-6. `lookup_address`
-7. `set_breakpoint` and `clear_breakpoint`
+## Current native limitations
 
-## Notes
+The native bridge remains intentionally small and compatible with OllyDbg 1.10.
+Remaining hardening work includes:
 
-- This bridge targets OllyDbg 1.10 specifically, not newer debugger families.
-- The project is most useful for controlled inspection and automation, not as a replacement for a modern debugger.
-- If you publish binaries, prefer GitHub releases or local build output rather than checking them into source control.
+- replacing the handwritten JSON parser with a real bounded parser
+- making all native response construction truncation-safe
+- marshalling every OllyDbg API call onto the debugger UI thread
+- adding an event-driven native pause sequence
+- using overlapped named-pipe I/O for immediate plugin shutdown
+- restricting the pipe ACL to the current interactive user
+
+These items should be completed before treating the bridge as suitable for
+hostile inputs or unattended long-running use.
 
 ## License
 
-MIT. See [`LICENSE`](./LICENSE).
+MIT. See [LICENSE](./LICENSE).

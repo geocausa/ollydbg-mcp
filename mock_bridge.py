@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-
 MOCK_STATE = {
     "process": "mock-target.exe",
     "pid": 31337,
