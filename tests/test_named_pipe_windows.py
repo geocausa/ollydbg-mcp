@@ -54,6 +54,7 @@ class WindowsPipeServer:
         ERROR_BROKEN_PIPE = 109
         ERROR_NO_DATA = 232
         ERROR_PIPE_NOT_CONNECTED = 233
+        ERROR_PIPE_NOT_CONNECTED = 233
 
         CreateNamedPipeW = kernel32.CreateNamedPipeW
         CreateNamedPipeW.argtypes = [
@@ -146,6 +147,23 @@ class WindowsPipeServer:
                     raise AssertionError(
                         f"incomplete server write: {written.value}/{len(chunk)}"
                     )
+
+            closed_probe = ctypes.create_string_buffer(1)
+            closed_read = ctypes.c_uint32(0)
+            if not ReadFile(
+                pipe,
+                closed_probe,
+                len(closed_probe),
+                ctypes.byref(closed_read),
+                None,
+            ):
+                error = ctypes.get_last_error()
+                if error not in (
+                    ERROR_BROKEN_PIPE,
+                    ERROR_NO_DATA,
+                    ERROR_PIPE_NOT_CONNECTED,
+                ):
+                    raise OSError(error, "waiting for client close failed")
 
             closed_probe = ctypes.create_string_buffer(1)
             closed_read = ctypes.c_uint32(0)
