@@ -1,7 +1,7 @@
 """Backward-compatible entry point for the structured runtime smoke test."""
 
-from ollydbg_mcp.smoke import main
+import runpy
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    runpy.run_module("ollydbg_mcp.smoke", run_name="__main__")
