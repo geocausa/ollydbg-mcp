@@ -61,6 +61,41 @@ jobs:
         shell: powershell
         run: Remove-Item .\build\native-ci -Recurse -Force -ErrorAction SilentlyContinue
 
+  runtime-target:
+    runs-on: windows-latest
+    steps:
+      - name: Fetch exact commit quietly
+        shell: powershell
+        run: |
+          git init -q
+          git remote add origin "https://github.com/$env:GITHUB_REPOSITORY.git"
+          git fetch -q --depth=1 origin $env:GITHUB_SHA
+          git checkout -q FETCH_HEAD
+      - name: Compile and inspect the controlled x86 smoke target
+        shell: cmd
+        run: |
+          @echo off
+          for /f "usebackq tokens=*" %%i in (`"%ProgramFiles(x86)%\Microsoft Visual Studio\Installer\vswhere.exe" -latest -products * -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath`) do set "VSINSTALL=%%i"
+          if not defined VSINSTALL (
+            echo Visual Studio C++ tools were not found.
+            exit /b 1
+          )
+          call "%VSINSTALL%\VC\Auxiliary\Build\vcvarsall.bat" x86 >nul
+          powershell -NoProfile -ExecutionPolicy Bypass -File .\integration\build_smoke_target.ps1 -OutputDir .\build\runtime-target-ci
+      - name: Validate the generated address manifest
+        shell: powershell
+        run: |
+          $manifest = Get-Content .\build\runtime-target-ci\olly_smoke_manifest.json -Raw | ConvertFrom-Json
+          if ($manifest.schema_version -ne 1) { throw "Unexpected manifest schema" }
+          if ($manifest.module_name -ne "olly_smoke_target.exe") { throw "Unexpected target module" }
+          if ($manifest.image_base -ne "0x00400000") { throw "Unexpected image base" }
+          if ($manifest.probe_address -notmatch '^0x004[0-9A-F]{5}$') { throw "Invalid probe address" }
+          if ($manifest.counter_address -notmatch '^0x004[0-9A-F]{5}$') { throw "Invalid counter address" }
+      - name: Remove the test-only smoke target
+        if: always()
+        shell: powershell
+        run: Remove-Item .\build\runtime-target-ci -Recurse -Force -ErrorAction SilentlyContinue
+
   named-pipe:
     runs-on: windows-latest
     steps:
