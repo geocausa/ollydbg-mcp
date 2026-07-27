@@ -27,7 +27,7 @@ def test_pause_sequence_is_native_and_exported() -> None:
 def test_json_and_response_construction_are_bounded() -> None:
     assert "static int append_format(" in SOURCE
     assert "used += (size_t)snprintf" not in SOURCE
-    assert "used + 1 >= out_size" in SOURCE
+    assert "*used + required >= output_size" in PARSER
     assert '#pragma comment(lib, "Advapi32.lib")' in SOURCE
 
 
