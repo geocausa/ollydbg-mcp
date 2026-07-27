@@ -24,6 +24,25 @@ def test_pipe_response_waits_for_client_drain() -> None:
     assert "FlushFileBuffers" not in SOURCE
 
 
+def test_native_mutation_gate_is_read_only_by_default() -> None:
+    assert SOURCE.count("static int command_requires_mutation(") == 1
+    assert 'environment_truthy("OLLYBRIDGE_ALLOW_MUTATIONS")' in SOURCE
+    assert '\"mutations_enabled\":%s' in SOURCE
+    assert '\"mutation_gate\":true' in SOURCE
+    assert "Native mutation gate is disabled" in SOURCE
+    assert "InterlockedExchange(&g_mutations_enabled, 0);" in SOURCE
+    for command in (
+        "write_memory",
+        "set_breakpoint",
+        "clear_breakpoint",
+        "set_hardware_breakpoint",
+        "clear_hardware_breakpoint",
+        "set_label",
+        "set_comment",
+    ):
+        assert f'strcmp(command, "{command}") == 0' in SOURCE
+
+
 def test_pause_sequence_is_native_and_exported() -> None:
     assert "g_pause_sequence" in SOURCE
     assert 'strcmp(command, "wait_for_pause") == 0' in SOURCE
@@ -73,7 +92,7 @@ def test_native_tables_are_paginated_with_bounded_page_sizes() -> None:
 
 def test_native_protocol_identifies_capabilities() -> None:
     assert "#define BRIDGE_PROTOCOL_VERSION 2" in SOURCE
-    assert "#define BRIDGE_PLUGIN_VERSION \"2.3\"" in SOURCE
+    assert "#define BRIDGE_PLUGIN_VERSION \"2.4\"" in SOURCE
     for capability in (
         "native_wait_for_pause",
         "owner_only_pipe",
@@ -82,6 +101,7 @@ def test_native_protocol_identifies_capabilities() -> None:
         "bounded_json_parser",
         "paged_tables",
         "client_drain_wait",
+        "mutation_gate",
         "remote_clients",
     ):
         assert capability in SOURCE

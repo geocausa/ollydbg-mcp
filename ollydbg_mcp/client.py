@@ -138,6 +138,10 @@ class OllyBridgeClient:
                 "paged_tables": bool(
                     status.get("capabilities", {}).get("paged_tables")
                 ),
+                "mutation_gate": bool(
+                    status.get("capabilities", {}).get("mutation_gate")
+                ),
+                "mutations_enabled": status.get("mutations_enabled") is True,
                 "atomic_snapshot": False,
             },
         }
