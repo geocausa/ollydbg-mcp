@@ -36,6 +36,7 @@ request to the native bridge. Addresses are represented canonically as unsigned
 - pause, continue, run, step and run-to-address helpers
 - debugger operations marshalled through OllyDbg's UI thread
 - event-driven native pause sequencing with an automatic legacy fallback
+- strict bounded native JSON parsing with UTF-8 and Unicode-escape validation
 - address lookup, labels and comments
 - guarded debuggee-memory writes
 - combined debugger snapshots
@@ -114,11 +115,13 @@ The native source lives at:
 
 ```text
 plugin_stub/ollydbg110_bridge.c
+plugin_stub/bridge_json.h
 ```
 
 Build a 32-bit `OllyBridge110.dll` against the OllyDbg 1.10 SDK. The build must:
 
 - include the SDK `Plugin.h`
+- keep `bridge_json.h` beside `ollydbg110_bridge.c`
 - use the structure packing and unsigned-character settings required by the SDK
 - export the OllyDbg plugin entry points
 - produce a 32-bit DLL
@@ -204,6 +207,10 @@ The Python boundary currently enforces:
 - aligned two-byte and four-byte data breakpoints
 - operation timeouts of at most 300 seconds
 
+The native parser independently validates the complete JSON document, exact
+field names, field types, integer ranges, UTF-8, escaped Unicode, duplicate
+requested fields, nesting depth and destination-buffer bounds.
+
 ## Testing
 
 Install development dependencies and run:
@@ -214,23 +221,30 @@ python -m ruff check .
 python -m pytest
 ```
 
+The standalone parser harness can also be compiled without the OllyDbg SDK:
+
+```text
+cc -std=c89 -pedantic -Wall -Wextra -Werror tests/native_json_harness.c -o native_json_harness
+./native_json_harness
+```
+
 The unit tests use a fake transport and do not require OllyDbg. They also assert
 that the native source retains the local-only pipe, interruptible shutdown,
-pause sequencing, UI-thread dispatch and bounded response protections. A manual
-smoke test remains available when the plugin is loaded:
+pause sequencing, UI-thread dispatch, bounded parser and bounded response
+protections. A manual smoke test remains available when the plugin is loaded:
 
 ```powershell
 python .\test_olly_bridge.py
 ```
 
-GitHub Actions runs linting and unit tests on Windows with Python 3.10 and 3.12.
+GitHub Actions runs linting and unit tests on Windows with Python 3.10 and 3.12,
+and compiles the native parser harness with strict C89 warnings on Ubuntu.
 
 ## Current native limitations
 
 The native bridge remains intentionally small and compatible with OllyDbg 1.10.
 Remaining work includes:
 
-- replacing the minimal field extractor with a complete bounded JSON parser
 - adding pagination for unusually large module, thread and breakpoint tables
 - compiling and exercising the DLL in CI when a redistributable SDK-compatible
   build environment is available

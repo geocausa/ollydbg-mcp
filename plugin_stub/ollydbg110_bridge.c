@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "Plugin.h"
+#include "bridge_json.h"
 
 #if defined(_MSC_VER)
 #pragma comment(lib, "Advapi32.lib")
@@ -19,7 +20,7 @@
 #define OLLYBRIDGE_WM_EXEC (WM_APP + 0x110)
 #define OLLYBRIDGE_WM_REQUEST (WM_APP + 0x111)
 #define BRIDGE_PROTOCOL_VERSION 2
-#define BRIDGE_PLUGIN_VERSION "2.0"
+#define BRIDGE_PLUGIN_VERSION "2.1"
 #ifndef PIPE_REJECT_REMOTE_CLIENTS
 #define PIPE_REJECT_REMOTE_CLIENTS 0x00000008
 #endif
@@ -362,84 +363,15 @@ static int parse_hex_bytes(const char *text, unsigned char *out, int max_bytes) 
 }
 
 static int extract_string_field(const char *json, const char *field, char *out, size_t out_size) {
-  char needle[64];
-  const char *cursor;
-  size_t used = 0;
-  if (json == NULL || field == NULL || out == NULL || out_size == 0) return 0;
-  snprintf(needle, sizeof(needle), "\"%s\"", field);
-  cursor = strstr(json, needle);
-  if (cursor == NULL) return 0;
-  cursor = strchr(cursor + strlen(needle), ':');
-  if (cursor == NULL) return 0;
-  cursor++;
-  while (*cursor == ' ' || *cursor == '\t' || *cursor == '\r' || *cursor == '\n') cursor++;
-  if (*cursor++ != '"') return 0;
-  while (*cursor != '\0') {
-    char ch = *cursor++;
-    if (ch == '"') { out[used] = '\0'; return 1; }
-    if (ch == '\\') {
-      ch = *cursor++;
-      if (ch == '\0' || ch == 'u') return 0;
-      if (ch == 'b') ch = '\b';
-      else if (ch == 'f') ch = '\f';
-      else if (ch == 'n') ch = '\n';
-      else if (ch == 'r') ch = '\r';
-      else if (ch == 't') ch = '\t';
-      else if (!(ch == '"' || ch == '\\' || ch == '/')) return 0;
-    }
-    if (used + 1 >= out_size) return 0;
-    out[used++] = ch;
-  }
-  return 0;
+  return bridge_json_extract_string(json, field, out, out_size);
 }
 
 static int extract_int_field(const char *json, const char *field, int *value) {
-  char needle[64];
-  const char *start;
-  char *end_ptr = NULL;
-
-  snprintf(needle, sizeof(needle), "\"%s\"", field);
-  start = strstr(json, needle);
-  if (start == NULL) {
-    return 0;
-  }
-  start = strchr(start + strlen(needle), ':');
-  if (start == NULL) {
-    return 0;
-  }
-  start++;
-  while (*start == ' ' || *start == '\t') {
-    start++;
-  }
-  *value = (int)strtol(start, &end_ptr, 10);
-  return end_ptr != start;
+  return bridge_json_extract_int(json, field, value);
 }
 
 static int extract_bool_field(const char *json, const char *field, int *value) {
-  char needle[64];
-  const char *start;
-  snprintf(needle, sizeof(needle), "\"%s\"", field);
-  start = strstr(json, needle);
-  if (start == NULL) {
-    return 0;
-  }
-  start = strchr(start + strlen(needle), ':');
-  if (start == NULL) {
-    return 0;
-  }
-  start++;
-  while (*start == ' ' || *start == '\t') {
-    start++;
-  }
-  if (strncmp(start, "true", 4) == 0) {
-    *value = 1;
-    return 1;
-  }
-  if (strncmp(start, "false", 5) == 0) {
-    *value = 0;
-    return 1;
-  }
-  return 0;
+  return bridge_json_extract_bool(json, field, value);
 }
 
 static void respond_error(char *out, size_t out_size, const char *message) {
@@ -469,7 +401,7 @@ static void respond_stateful_error(char *out, size_t out_size, const char *messa
 
 static void handle_status(char *out, size_t out_size) {
   snprintf(out, out_size,
-      "{\"ok\":true,\"protocol_version\":%d,\"plugin_version\":\"%s\",\"pipe\":\"\\\\\\\\.\\\\pipe\\\\OllyBridge110\",\"debug_status\":%d,\"last_pause_reason\":%ld,\"last_pause_reasonex\":%ld,\"last_pause_eip\":\"0x%08lX\",\"pause_sequence\":%ld,\"capabilities\":{\"native_wait_for_pause\":true,\"owner_only_pipe\":true,\"overlapped_pipe\":true,\"ui_thread_dispatch\":true,\"remote_clients\":false}}\n",
+      "{\"ok\":true,\"protocol_version\":%d,\"plugin_version\":\"%s\",\"pipe\":\"\\\\\\\\.\\\\pipe\\\\OllyBridge110\",\"debug_status\":%d,\"last_pause_reason\":%ld,\"last_pause_reasonex\":%ld,\"last_pause_eip\":\"0x%08lX\",\"pause_sequence\":%ld,\"capabilities\":{\"native_wait_for_pause\":true,\"owner_only_pipe\":true,\"overlapped_pipe\":true,\"ui_thread_dispatch\":true,\"bounded_json_parser\":true,\"remote_clients\":false}}\n",
       BRIDGE_PROTOCOL_VERSION, BRIDGE_PLUGIN_VERSION, (int)g_getstatus(),
       g_last_pause_reason, g_last_pause_reasonex, (ulong)g_last_pause_eip,
       InterlockedCompareExchange(&g_pause_sequence, 0, 0));
