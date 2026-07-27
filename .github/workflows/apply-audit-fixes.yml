@@ -27,6 +27,8 @@ jobs:
           git checkout -q -B audit-fixes-v13 FETCH_HEAD
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Prepare exact transformer literals
+        run: python tools/prepare_audit_fixes.py
       - name: Apply exact audit transformations
         run: python tools/apply_audit_fixes.py
       - name: Commit transformed files
