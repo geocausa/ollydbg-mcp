@@ -85,6 +85,9 @@ if ($RestartOlly) {
 if ($SkipIniUpdate) {
     $launcherArgs.SkipIniUpdate = $true
 }
+if ($AllowMutations) {
+    $launcherArgs.EnableNativeMutations = $true
+}
 & $launcher @launcherArgs
 
 $python = Get-Command python -ErrorAction Stop
