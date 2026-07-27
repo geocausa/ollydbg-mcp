@@ -177,6 +177,15 @@ def run_smoke(
         and body["native"].get("capabilities", {}).get("remote_clients") is False,
     )
 
+    module: dict[str, Any] | None = None
+    if manifest is not None:
+        ready = capture(
+            "target_ready",
+            lambda: client.wait_for_ready(timeout_seconds, 0.1, manifest.module_name),
+            lambda body: body.get("ok") is True and isinstance(body.get("module"), dict),
+        )
+        module = ready.get("module") if isinstance(ready, dict) else None
+
     capture("modules", client.list_modules, lambda body: isinstance(body.get("modules"), list))
     capture("threads", client.list_threads, lambda body: isinstance(body.get("threads"), list))
     capture(
@@ -187,12 +196,6 @@ def run_smoke(
     capture("snapshot", client.snapshot, lambda body: body.get("ok") is True)
 
     if manifest is not None:
-        ready = capture(
-            "target_ready",
-            lambda: client.wait_for_ready(timeout_seconds, 0.1, manifest.module_name),
-            lambda body: body.get("ok") is True and isinstance(body.get("module"), dict),
-        )
-        module = ready.get("module") if isinstance(ready, dict) else None
         capture(
             "manifest_addresses",
             lambda: {
