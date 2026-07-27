@@ -1,0 +1,44 @@
+name: Apply audit fixes
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-audit-fixes-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'audit-fixes-v13'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch branch quietly
+        shell: bash
+        run: |
+          git init -q
+          git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git fetch -q --depth=10 origin audit-fixes-v13
+          git checkout -q -B audit-fixes-v13 FETCH_HEAD
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Apply exact audit transformations
+        run: python tools/apply_audit_fixes.py
+      - name: Commit transformed files
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo "Audit fixes are already applied."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add README.md ollydbg_mcp/client.py ollydbg_mcp/smoke.py plugin_stub/OllyBridge110.def plugin_stub/build_plugin.ps1 plugin_stub/ollydbg110_bridge.c start_olly_bridge.ps1 tests/test_named_pipe_windows.py tests/test_native_source.py tests/test_runtime_harness.py tests/test_smoke.py tests/test_transport.py
+          git commit -m "Apply audit correctness fixes"
+          git pull --rebase origin audit-fixes-v13
+          git push origin HEAD:audit-fixes-v13
