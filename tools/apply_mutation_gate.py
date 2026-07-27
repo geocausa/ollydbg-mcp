@@ -98,7 +98,7 @@ text = replace_once(
     return;
   }
   if (strcmp(command, "status") == 0) {
-''',
+'''.replace('\\"', '"'),
     r'''  if (!extract_string_field(json, "command", command, sizeof(command))) {
     respond_error(out, out_size, "Missing command");
     return;
@@ -113,7 +113,7 @@ text = replace_once(
     return;
   }
   if (strcmp(command, "status") == 0) {
-''',
+'''.replace('\\"', '"'),
     "dispatch gate",
 )
 text = replace_once(
@@ -128,11 +128,11 @@ text = replace_once(
 )
 text = replace_once(
     text,
-    '  log_line("  Named pipe: \\\\.\\pipe\\OllyBridge110");',
-    '  log_line("  Named pipe: \\\\.\\pipe\\OllyBridge110");\n'
+    '  log_line("OllyBridge110 plugin loaded");\n',
+    '  log_line("OllyBridge110 plugin loaded");\n'
     '  log_line(InterlockedCompareExchange(&g_mutations_enabled, 0, 0)\n'
     '      ? "  Native mutations: enabled"\n'
-    '      : "  Native mutations: disabled (read-only gate)");',
+    '      : "  Native mutations: disabled (read-only gate)");\n',
     "mutation log",
 )
 text = replace_once(
