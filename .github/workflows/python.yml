@@ -77,10 +77,8 @@ jobs:
           cache: pip
       - name: Install test dependencies quietly
         run: python -m pip install -q -e ".[dev]"
-      - name: Diagnose immediate server disconnect
-        run: >-
-          python -m pytest -vv -x --tb=short
-          tests/test_named_pipe_windows.py::test_real_named_pipe_round_trip_handles_fragmented_response
+      - name: Run real Windows named-pipe tests
+        run: python -m pytest -vv tests/test_named_pipe_windows.py
 
   test:
     runs-on: windows-latest
