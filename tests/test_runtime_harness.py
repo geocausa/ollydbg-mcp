@@ -8,6 +8,7 @@ TARGET_BUILD = (ROOT / "integration" / "build_smoke_target.ps1").read_text(
 RUNTIME_RUNNER = (ROOT / "integration" / "run_runtime_smoke.ps1").read_text(
     encoding="utf-8"
 )
+SMOKE = (ROOT / "ollydbg_mcp" / "smoke.py").read_text(encoding="utf-8")
 LAUNCHER = (ROOT / "start_olly_bridge.ps1").read_text(encoding="utf-8")
 WORKFLOW = (ROOT / ".github" / "workflows" / "python.yml").read_text(encoding="utf-8")
 PYPROJECT = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
@@ -51,6 +52,10 @@ def test_runtime_runner_requires_genuine_sdk_and_uses_safe_launcher() -> None:
     assert '"--manifest"' in RUNTIME_RUNNER
     assert '"--allow-mutations"' in RUNTIME_RUNNER
     assert '"--allow-execution"' in RUNTIME_RUNNER
+
+
+def test_manifest_target_is_ready_before_snapshot_inspection() -> None:
+    assert SMOKE.index('"target_ready"') < SMOKE.index('capture("snapshot"')
 
 
 def test_launcher_keeps_existing_behaviour_with_optional_smoke_inputs() -> None:
