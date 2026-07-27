@@ -1,3 +1,4 @@
+# ruff: noqa: I001
 """Backward-compatible entry point for the structured runtime smoke test."""
 
 import runpy
