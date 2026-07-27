@@ -1,0 +1,40 @@
+name: Remove pipe drain duplicate
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: remove-pipe-drain-duplicate-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'named-pipe-integration-v8'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+          show-progress: false
+      - name: Remove duplicate helper exactly
+        run: python tools/remove_pipe_drain_duplicate.py
+      - name: Commit cleanup
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo "Duplicate is already removed."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add plugin_stub/ollydbg110_bridge.c
+          git commit -m "Remove duplicate pipe drain helper"
+          git pull --rebase origin "${{ github.event.pull_request.head.ref }}"
+          git push origin "HEAD:${{ github.event.pull_request.head.ref }}"
