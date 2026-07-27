@@ -24,7 +24,9 @@
 #define extc extern
 #endif
 
+#ifndef cdecl
 #define cdecl __cdecl
+#endif
 
 typedef unsigned char uchar;
 typedef unsigned long ulong;
