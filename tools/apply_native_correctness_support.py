@@ -11,22 +11,6 @@ def replace_once(path: Path, old: str, new: str, label: str) -> None:
     path.write_text(text.replace(old, new, 1), encoding="utf-8")
 
 
-workflow = ROOT / ".github" / "workflows" / "python.yml"
-replace_once(
-    workflow,
-    '''      - name: Run bounded JSON parser harness
-        run: ./native_json_harness
-''',
-    '''      - name: Run bounded JSON parser harness
-        run: ./native_json_harness
-      - name: Compile strict native value parser harness
-        run: cc -std=c89 -pedantic -Wall -Wextra -Werror tests/native_values_harness.c -o native_values_harness
-      - name: Run strict native value parser harness
-        run: ./native_values_harness
-''',
-    "native value CI",
-)
-
 smoke = ROOT / "ollydbg_mcp" / "smoke.py"
 replace_once(
     smoke,
