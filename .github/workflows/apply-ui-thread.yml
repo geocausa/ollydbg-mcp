@@ -6,12 +6,14 @@ on:
     paths:
       - tools/apply_ui_thread.py
       - tools/prepare_ui_thread_patch.py
+      - tools/apply_ui_pending_guard.py
       - .github/workflows/apply-ui-thread.yml
   pull_request:
     branches: [main]
     paths:
       - tools/apply_ui_thread.py
       - tools/prepare_ui_thread_patch.py
+      - tools/apply_ui_pending_guard.py
       - .github/workflows/apply-ui-thread.yml
 
 permissions:
@@ -44,6 +46,11 @@ jobs:
             python tools/prepare_ui_thread_patch.py
             python tools/apply_ui_thread.py
           fi
+          if grep -q 'InterlockedCompareExchange(&g_bridge_request.pending, 1, 0)' "$source_file"; then
+            echo "UI request ownership guards already applied"
+          else
+            python tools/apply_ui_pending_guard.py
+          fi
           git diff --check
       - name: Commit generated source when changed
         shell: bash
@@ -57,7 +64,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add plugin_stub/ollydbg110_bridge.c
-          git commit -m "Marshal bridge requests through the OllyDbg UI thread"
+          git commit -m "Guard UI-thread request ownership"
           for attempt in 1 2 3; do
             git fetch -q origin ui-thread-hardening-v3
             git rebase origin/ui-thread-hardening-v3
