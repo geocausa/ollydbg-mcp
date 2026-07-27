@@ -1,0 +1,66 @@
+name: Apply JSON parser integration
+
+on:
+  push:
+    branches: [json-parser-hardening-v4]
+    paths:
+      - tools/apply_json_parser.py
+      - .github/workflows/apply-json-parser.yml
+  pull_request:
+    branches: [main]
+    paths:
+      - tools/apply_json_parser.py
+      - .github/workflows/apply-json-parser.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    concurrency:
+      group: json-parser-hardening-v4-generator
+      cancel-in-progress: false
+    steps:
+      - name: Fetch working branch quietly
+        shell: bash
+        run: |
+          git init -q
+          git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git fetch -q origin json-parser-hardening-v4
+          git checkout -q -B json-parser-hardening-v4 FETCH_HEAD
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Apply checked parser integration
+        shell: bash
+        run: |
+          set -euo pipefail
+          source_file=plugin_stub/ollydbg110_bridge.c
+          if grep -q '#include "bridge_json.h"' "$source_file"; then
+            echo "Bounded JSON parser already integrated"
+          else
+            python tools/apply_json_parser.py
+          fi
+          git diff --check
+      - name: Commit generated source when changed
+        shell: bash
+        run: |
+          set -euo pipefail
+          if git diff --quiet; then
+            echo "Generated source is already up to date"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add plugin_stub/ollydbg110_bridge.c
+          git commit -m "Use the bounded native JSON parser"
+          for attempt in 1 2 3; do
+            git fetch -q origin json-parser-hardening-v4
+            git rebase origin/json-parser-hardening-v4
+            if git push origin HEAD:json-parser-hardening-v4; then
+              exit 0
+            fi
+            echo "Push race detected; retrying ($attempt/3)"
+            sleep $((attempt * 2))
+          done
+          exit 1
