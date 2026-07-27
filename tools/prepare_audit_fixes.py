@@ -21,6 +21,14 @@ replacements = (
         r'''    r''' + "'''" + r'''\"hardware_breakpoint_validation\":true,\"execution_result_validation\":true,\"hardware_breakpoint_address_delete\":true,\"debuggee_reset\":true,\"remote_clients\":false''',
     ),
     (
+        r'''    ''' + "'''" + r'''    assert "#define BRIDGE_PLUGIN_VERSION \"2.6\"" in SOURCE''',
+        r'''    r''' + "'''" + r'''    assert "#define BRIDGE_PLUGIN_VERSION \"2.6\"" in SOURCE''',
+    ),
+    (
+        r'''    ''' + "'''" + r'''    assert "#define BRIDGE_PLUGIN_VERSION \"2.7\"" in SOURCE''',
+        r'''    r''' + "'''" + r'''    assert "#define BRIDGE_PLUGIN_VERSION \"2.7\"" in SOURCE''',
+    ),
+    (
         '''            reached_probe = (
                 isinstance(run_to_probe, dict)
                 and run_to_probe.get("ok") is True
