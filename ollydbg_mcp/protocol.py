@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import os
-from typing import Any
 
 DEFAULT_PIPE_NAME = os.environ.get("OLLYDBG_PIPE_NAME", r"\\.\pipe\OllyBridge110")
 DEFAULT_TIMEOUT_SECONDS = float(os.environ.get("OLLYDBG_TIMEOUT_SECONDS", "5"))
