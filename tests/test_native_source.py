@@ -2,6 +2,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = (ROOT / "plugin_stub" / "ollydbg110_bridge.c").read_text(encoding="utf-8")
+PARSER = (ROOT / "plugin_stub" / "bridge_json.h").read_text(encoding="utf-8")
 EXPORTS = (ROOT / "plugin_stub" / "OllyBridge110.def").read_text(encoding="utf-8")
 
 
@@ -26,19 +27,34 @@ def test_pause_sequence_is_native_and_exported() -> None:
 def test_json_and_response_construction_are_bounded() -> None:
     assert "static int append_format(" in SOURCE
     assert "used += (size_t)snprintf" not in SOURCE
-    assert "end = strchr(start, '\"')" not in SOURCE
     assert "used + 1 >= out_size" in SOURCE
     assert '#pragma comment(lib, "Advapi32.lib")' in SOURCE
 
 
+def test_bounded_json_parser_is_integrated() -> None:
+    assert '#include "bridge_json.h"' in SOURCE
+    assert "return bridge_json_extract_string(json, field, out, out_size);" in SOURCE
+    assert "return bridge_json_extract_int(json, field, value);" in SOURCE
+    assert "return bridge_json_extract_bool(json, field, value);" in SOURCE
+    assert 'snprintf(needle, sizeof(needle), "\\\"%s\\\"", field)' not in SOURCE
+    assert "BRIDGE_JSON_MAX_DEPTH 16" in PARSER
+    assert "bridge_json_find_field(" in PARSER
+    assert "bridge_json_parse_raw_utf8(" in PARSER
+    assert "bridge_json_parse_hex4(" in PARSER
+    assert "bridge_json_extract_string(" in PARSER
+    assert "bridge_json_extract_int(" in PARSER
+    assert "bridge_json_extract_bool(" in PARSER
+
+
 def test_native_protocol_identifies_capabilities() -> None:
     assert "#define BRIDGE_PROTOCOL_VERSION 2" in SOURCE
-    assert "#define BRIDGE_PLUGIN_VERSION \"2.0\"" in SOURCE
+    assert "#define BRIDGE_PLUGIN_VERSION \"2.1\"" in SOURCE
     for capability in (
         "native_wait_for_pause",
         "owner_only_pipe",
         "overlapped_pipe",
         "ui_thread_dispatch",
+        "bounded_json_parser",
         "remote_clients",
     ):
         assert capability in SOURCE
