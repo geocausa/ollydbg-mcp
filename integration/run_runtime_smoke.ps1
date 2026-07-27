@@ -52,27 +52,24 @@ if (!(Test-Path -LiteralPath $vcvars -PathType Leaf)) {
     throw "vcvarsall.bat was not found: $vcvars"
 }
 
-New-Item -ItemType Directory -Path $outputPath -Force | Out-Null
-$commandFile = Join-Path $outputPath "build_runtime_smoke.cmd"
-$commandText = @"
-@echo off
-call "$vcvars" x86 >nul
-if errorlevel 1 exit /b %errorlevel%
-powershell -NoProfile -ExecutionPolicy Bypass -File "$pluginBuild" -SdkDir "$sdkPath" -OutputDir "$pluginOutput"
-if errorlevel 1 exit /b %errorlevel%
-powershell -NoProfile -ExecutionPolicy Bypass -File "$targetBuild" -OutputDir "$targetOutput"
-if errorlevel 1 exit /b %errorlevel%
-"@
-[System.IO.File]::WriteAllText($commandFile, $commandText, [System.Text.Encoding]::ASCII)
-try {
-    & cmd.exe /D /C $commandFile
-    if ($LASTEXITCODE -ne 0) {
-        throw "Runtime smoke build failed with exit code $LASTEXITCODE"
+$environmentCommand = 'call "{0}" x86 >nul && set' -f $vcvars
+$environmentLines = & cmd.exe /D /S /C $environmentCommand
+if ($LASTEXITCODE -ne 0) {
+    throw "Unable to initialise the Visual Studio x86 build environment."
+}
+foreach ($line in $environmentLines) {
+    $separator = $line.IndexOf('=')
+    if ($separator -le 0) {
+        continue
     }
+    $name = $line.Substring(0, $separator)
+    $value = $line.Substring($separator + 1)
+    [System.Environment]::SetEnvironmentVariable($name, $value, "Process")
 }
-finally {
-    Remove-Item -LiteralPath $commandFile -Force -ErrorAction SilentlyContinue
-}
+
+New-Item -ItemType Directory -Path $outputPath -Force | Out-Null
+& $pluginBuild -SdkDir $sdkPath -OutputDir $pluginOutput
+& $targetBuild -OutputDir $targetOutput
 
 $launcherArgs = @{
     TargetExe = $targetExe
