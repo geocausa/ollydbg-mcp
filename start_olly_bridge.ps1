@@ -45,6 +45,24 @@ if ($TargetExe) {
     }
 }
 
+# Refuse or stop OllyDbg before changing its configuration or replacing a DLL
+# that may still be mapped into the running process.
+$runningOlly = Get-Process -Name OLLYDBG -ErrorAction SilentlyContinue
+if ($runningOlly) {
+    if (!$RestartOlly) {
+        throw 'OllyDbg is already running. Close it or pass -RestartOlly explicitly.'
+    }
+    $runningOlly | Stop-Process -Force
+    $stopDeadline = [DateTime]::UtcNow.AddSeconds(10)
+    do {
+        Start-Sleep -Milliseconds 100
+        $stillRunning = Get-Process -Name OLLYDBG -ErrorAction SilentlyContinue
+    } while ($stillRunning -and [DateTime]::UtcNow -lt $stopDeadline)
+    if ($stillRunning) {
+        throw 'OllyDbg did not stop within 10 seconds; no configuration or plugin files were changed.'
+    }
+}
+
 if (!(Test-Path -LiteralPath $PluginDir)) {
     New-Item -ItemType Directory -Path $PluginDir | Out-Null
 }
@@ -76,15 +94,6 @@ if (!$SkipIniUpdate) {
 Copy-Item -LiteralPath $resolvedPluginDll `
     -Destination (Join-Path $pluginPath 'OllyBridge110.dll') `
     -Force
-
-$runningOlly = Get-Process -Name OLLYDBG -ErrorAction SilentlyContinue
-if ($runningOlly) {
-    if (!$RestartOlly) {
-        throw 'OllyDbg is already running. Close it or pass -RestartOlly explicitly.'
-    }
-    $runningOlly | Stop-Process -Force
-    Start-Sleep -Milliseconds 500
-}
 
 $ollyArguments = @()
 if ($TargetExe) {
