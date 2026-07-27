@@ -14,6 +14,16 @@ replacements = (
         "    r'''        char command[64];\n        request[read] = '\\0';",
     ),
     (
+        "    '''\"overlapped_pipe\\\":true,\\\"remote_clients\\\":false'''",
+        "    r'''\\\"overlapped_pipe\\\":true,\\\"remote_clients\\\":false'''",
+    ),
+    (
+        "    '''\"overlapped_pipe\\\":true,\\\"ui_thread_dispatch\\\":true,"
+        "\\\"remote_clients\\\":false'''",
+        "    r'''\\\"overlapped_pipe\\\":true,\\\"ui_thread_dispatch\\\":true,"
+        "\\\"remote_clients\\\":false'''",
+    ),
+    (
         """replace_once(
     '''    CloseHandle(g_pause_event); g_pause_event = NULL;
     CloseHandle(g_exec_request.done_event);
