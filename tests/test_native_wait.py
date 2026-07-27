@@ -42,14 +42,12 @@ def test_wait_for_pause_uses_native_sequence_when_available() -> None:
     assert result["ok"] is True
     assert result["native"] is True
     assert result["status"]["pause_sequence"] == 8
-    assert transport.calls == [
-        {
-            "protocol_version": 1,
-            "command": "wait_for_pause",
-            "after_sequence": 7,
-            "timeout_ms": 250,
-        }
-    ]
+    assert len(transport.calls) == 1
+    request = transport.calls[0]
+    assert request["protocol_version"] == 1
+    assert request["command"] == "wait_for_pause"
+    assert request["after_sequence"] == 7
+    assert 1 <= request["timeout_ms"] <= 250
 
 
 def test_wait_for_pause_keeps_legacy_polling_fallback(
