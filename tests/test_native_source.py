@@ -27,8 +27,8 @@ def test_pipe_response_waits_for_client_drain() -> None:
 def test_native_mutation_gate_is_read_only_by_default() -> None:
     assert SOURCE.count("static int command_requires_mutation(") == 1
     assert 'environment_truthy("OLLYBRIDGE_ALLOW_MUTATIONS")' in SOURCE
-    assert '\"mutations_enabled\":%s' in SOURCE
-    assert '\"mutation_gate\":true' in SOURCE
+    assert '\\"mutations_enabled\\":%s' in SOURCE
+    assert '\\"mutation_gate\\":true' in SOURCE
     assert "Native mutation gate is disabled" in SOURCE
     assert "InterlockedExchange(&g_mutations_enabled, 0);" in SOURCE
     for command in (
