@@ -17,7 +17,7 @@ def test_pipe_is_local_owner_only_and_interruptible() -> None:
 def test_pause_sequence_is_native_and_exported() -> None:
     assert "g_pause_sequence" in SOURCE
     assert 'strcmp(command, "wait_for_pause") == 0' in SOURCE
-    assert '"pause_sequence"' in SOURCE
+    assert '\\"pause_sequence\\"' in SOURCE
     assert "WaitForSingleObject(g_pipe_thread, INFINITE)" in SOURCE
     assert "_ODBG_Paused" in EXPORTS
     assert "_ODBG_Pausedex" in EXPORTS
