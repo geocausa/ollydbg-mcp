@@ -45,6 +45,7 @@ request to the native bridge. Addresses are represented canonically as unsigned
 - serialized Python requests with bounded response waits
 - owner-restricted, local-only named-pipe access
 - interruptible overlapped pipe I/O for clean plugin shutdown
+- reproducible 32-bit MSVC build and export validation
 
 ## Safety defaults
 
@@ -67,8 +68,8 @@ expose the MCP server to untrusted networks or users.
 - Windows
 - Python 3.10 or newer
 - OllyDbg 1.10
-- a 32-bit C compiler compatible with the OllyDbg 1.10 plugin SDK
-- the OllyDbg 1.10 `Plugin.h` header and import environment
+- 32-bit Microsoft Visual C++ build tools
+- the genuine OllyDbg 1.10 `Plugin.h` header
 
 The Python dependency is pinned to the compatible MCP Python SDK v1 line until
 the project is deliberately migrated to SDK v2.
@@ -118,20 +119,47 @@ plugin_stub/ollydbg110_bridge.c
 plugin_stub/bridge_json.h
 ```
 
-Build a 32-bit `OllyBridge110.dll` against the OllyDbg 1.10 SDK. The build must:
+Open a **32-bit Visual Studio Native Tools** PowerShell or command prompt, then
+run the supplied build script with the directory containing the genuine
+OllyDbg 1.10 `Plugin.h`:
 
-- include the SDK `Plugin.h`
-- keep `bridge_json.h` beside `ollydbg110_bridge.c`
-- use the structure packing and unsigned-character settings required by the SDK
-- export the OllyDbg plugin entry points
-- produce a 32-bit DLL
-- link the Windows `Advapi32` library for the owner-only pipe security descriptor
+```powershell
+.\plugin_stub\build_plugin.ps1 `
+  -SdkDir 'C:\Path\To\OllyDbg110SDK' `
+  -OutputDir '.\build\native'
+```
 
-MSVC builds receive the `Advapi32` link directive from the source. Other
-Windows toolchains may need the library added explicitly to their linker flags.
+The build script:
 
-Copy the DLL into the plugin directory configured by `ollydbg.ini` and restart
+- refuses to use the repository's test-only SDK shim for a real build
+- compiles C code with unsigned-character mode (`/J`)
+- treats compiler warnings as errors
+- links an x86 Windows DLL
+- links `Kernel32`, `User32` and `Advapi32`
+- verifies the PE image is 32-bit x86
+- verifies all eight required OllyDbg callback exports
+
+A successful real build produces:
+
+```text
+build/native/OllyBridge110.dll
+```
+
+Copy that DLL into the plugin directory configured by `ollydbg.ini` and restart
 OllyDbg.
+
+## CI native build validation
+
+GitHub Actions compiles and links the complete DLL on a Windows x86 MSVC
+environment using `tests/ollydbg_sdk_stub/Plugin.h`. That header is a clearly
+marked **test-only compile shim** containing only the names and fields needed to
+check this source tree. CI verifies syntax, warning cleanliness, linking, x86
+machine type and callback exports, then deletes the generated DLL without
+uploading it.
+
+The CI DLL must never be distributed or loaded into OllyDbg. It does not prove
+binary compatibility with the real SDK. Only the genuine-SDK command above
+produces a candidate plugin for runtime testing.
 
 ## Safer launcher
 
@@ -250,25 +278,26 @@ cc -std=c89 -pedantic -Wall -Wextra -Werror tests/native_json_harness.c -o nativ
 
 The unit tests use a fake transport and do not require OllyDbg. They also assert
 that the native source retains the local-only pipe, interruptible shutdown,
-pause sequencing, UI-thread dispatch, bounded parser, bounded response and
-bounded pagination protections. A manual smoke test remains available when the
-plugin is loaded:
+pause sequencing, UI-thread dispatch, bounded parser, bounded response,
+bounded pagination and native-build protections. A manual smoke test remains
+available when a genuine-SDK plugin is loaded:
 
 ```powershell
 python .\test_olly_bridge.py
 ```
 
 GitHub Actions runs linting and unit tests on Windows with Python 3.10 and 3.12,
-and compiles the native parser harness with strict C89 warnings on Ubuntu.
+compiles the native parser harness with strict C89 warnings on Ubuntu, and
+compiles, links and inspects the complete 32-bit DLL on Windows.
 
 ## Current native limitations
 
 The native bridge remains intentionally small and compatible with OllyDbg 1.10.
-Remaining work includes:
+Remaining work requires a real debugger environment:
 
-- compiling and exercising the DLL in CI when a redistributable SDK-compatible
-  build environment is available
-- adding automated integration tests against a real OllyDbg 1.10 instance
+- build against the genuine OllyDbg 1.10 SDK and confirm its ABI at runtime
+- load the resulting DLL into a real OllyDbg 1.10 installation
+- run automated integration tests against a controlled 32-bit debug target
 
 The current bridge is substantially safer for normal local use, but it should
 still be treated as trusted-user debugger automation rather than a hardened
