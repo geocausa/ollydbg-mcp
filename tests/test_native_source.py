@@ -24,15 +24,6 @@ def test_pipe_response_waits_for_client_drain() -> None:
     assert "FlushFileBuffers" not in SOURCE
 
 
-def test_pipe_response_waits_for_client_drain() -> None:
-    assert "#define PIPE_CLIENT_DRAIN_TIMEOUT_MS 5000" in SOURCE
-    assert "static int wait_for_pipe_io_timeout(" in SOURCE
-    assert "static void wait_for_client_close(" in SOURCE
-    assert "error == ERROR_PIPE_NOT_CONNECTED" in SOURCE
-    assert "wait_for_client_close(pipe, &ov);" in SOURCE
-    assert "FlushFileBuffers" not in SOURCE
-
-
 def test_pause_sequence_is_native_and_exported() -> None:
     assert "g_pause_sequence" in SOURCE
     assert 'strcmp(command, "wait_for_pause") == 0' in SOURCE
