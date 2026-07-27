@@ -22,13 +22,16 @@ permissions:
 jobs:
   apply:
     runs-on: ubuntu-latest
+    concurrency:
+      group: native-hardening-v2-generator
+      cancel-in-progress: false
     steps:
       - name: Fetch working branch quietly
         shell: bash
         run: |
           git init -q
           git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
-          git fetch -q --depth=1 origin native-hardening-v2
+          git fetch -q origin native-hardening-v2
           git checkout -q -B native-hardening-v2 FETCH_HEAD
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
@@ -52,6 +55,7 @@ jobs:
       - name: Commit generated native source when changed
         shell: bash
         run: |
+          set -euo pipefail
           if git diff --quiet; then
             echo "Native source is already up to date"
             exit 0
@@ -60,4 +64,14 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add plugin_stub/ollydbg110_bridge.c
           git commit -m "Bound native bridge response construction"
-          git push origin HEAD:native-hardening-v2
+          for attempt in 1 2 3; do
+            git fetch -q origin native-hardening-v2
+            git rebase origin/native-hardening-v2
+            if git push origin HEAD:native-hardening-v2; then
+              exit 0
+            fi
+            echo "Push race detected; retrying ($attempt/3)"
+            sleep $((attempt * 2))
+          done
+          echo "Unable to update native-hardening-v2 after retries"
+          exit 1
