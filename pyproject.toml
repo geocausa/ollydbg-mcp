@@ -30,6 +30,7 @@ dev = [
 
 [project.scripts]
 ollydbg-mcp = "ollydbg_mcp.server:main"
+ollydbg-smoke = "ollydbg_mcp.smoke:main"
 
 [tool.hatch.build.targets.wheel]
 packages = ["ollydbg_mcp"]
