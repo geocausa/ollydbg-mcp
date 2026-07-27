@@ -83,7 +83,7 @@ def test_native_values_are_strict_and_portable() -> None:
     assert "bridge_parse_u32_hex(" in VALUES
     assert "bridge_parse_hex_bytes(" in VALUES
     assert "digits >= 8" in VALUES
-    assert "*text != '\0'" in VALUES
+    assert "*text != '\\0'" in VALUES
     assert "length > (size_t)max_bytes * 2" in VALUES
 
 
