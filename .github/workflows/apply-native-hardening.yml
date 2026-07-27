@@ -7,6 +7,12 @@ on:
       - tools/native_patch_protocol.py
       - tools/native_patch_pipe.py
       - .github/workflows/apply-native-hardening.yml
+  pull_request:
+    branches: [main]
+    paths:
+      - tools/native_patch_protocol.py
+      - tools/native_patch_pipe.py
+      - .github/workflows/apply-native-hardening.yml
 
 permissions:
   contents: write
