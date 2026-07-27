@@ -46,15 +46,32 @@ def test_bounded_json_parser_is_integrated() -> None:
     assert "bridge_json_extract_bool(" in PARSER
 
 
+def test_native_tables_are_paginated_with_bounded_page_sizes() -> None:
+    assert "#define BREAKPOINT_PAGE_LIMIT 32" in SOURCE
+    assert "#define MODULE_PAGE_LIMIT 8" in SOURCE
+    assert "#define THREAD_PAGE_LIMIT 32" in SOURCE
+    assert "static int extract_optional_int_field(" in SOURCE
+    assert "static int parse_page_request(" in SOURCE
+    assert '\\"has_more\\"' in SOURCE
+    assert '\\"next_offset\\"' in SOURCE
+    assert "handle_list_breakpoints(json, out, out_size);" in SOURCE
+    assert "handle_list_modules(json, out, out_size);" in SOURCE
+    assert "handle_list_threads(json, out, out_size);" in SOURCE
+    assert "handle_list_breakpoints(out, out_size);" not in SOURCE
+    assert "handle_list_modules(out, out_size);" not in SOURCE
+    assert "handle_list_threads(out, out_size);" not in SOURCE
+
+
 def test_native_protocol_identifies_capabilities() -> None:
     assert "#define BRIDGE_PROTOCOL_VERSION 2" in SOURCE
-    assert "#define BRIDGE_PLUGIN_VERSION \"2.1\"" in SOURCE
+    assert "#define BRIDGE_PLUGIN_VERSION \"2.2\"" in SOURCE
     for capability in (
         "native_wait_for_pause",
         "owner_only_pipe",
         "overlapped_pipe",
         "ui_thread_dispatch",
         "bounded_json_parser",
+        "paged_tables",
         "remote_clients",
     ):
         assert capability in SOURCE

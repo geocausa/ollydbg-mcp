@@ -31,7 +31,7 @@ request to the native bridge. Addresses are represented canonically as unsigned
 
 - debugger status and decoded pause metadata
 - register, memory, stack and disassembly reads
-- module, thread and breakpoint enumeration
+- complete module, thread and breakpoint enumeration through bounded pages
 - software and hardware breakpoint management
 - pause, continue, run, step and run-to-address helpers
 - debugger operations marshalled through OllyDbg's UI thread
@@ -195,6 +195,25 @@ Execution:
 - `olly_wait_for_pause`
 - `olly_prepare_session`
 
+## Table pagination
+
+The native plugin keeps every table response within the 8 KB pipe buffer:
+
+- modules: at most 8 entries per native page
+- threads: at most 32 entries per native page
+- software breakpoints: at most 32 entries per native page
+
+The Python client follows all pages automatically. Existing MCP tools therefore
+still return one complete `modules`, `threads`, or `breakpoints` list instead of
+exposing page management to the caller. It rejects empty intermediate pages,
+non-progressing offsets, malformed item fields, excessive page counts and
+unreasonably large aggregate tables.
+
+A new Python server remains compatible with an older unpaged plugin DLL. To
+receive complete large tables from plugin version 2.2 or newer, update the
+Python server and plugin DLL together; an older Python client would only see the
+first native page.
+
 ## Validation limits
 
 The Python boundary currently enforces:
@@ -206,6 +225,7 @@ The Python boundary currently enforces:
 - execute hardware breakpoints of one byte
 - aligned two-byte and four-byte data breakpoints
 - operation timeouts of at most 300 seconds
+- at most 4096 native table pages and 100,000 aggregate table items
 
 The native parser independently validates the complete JSON document, exact
 field names, field types, integer ranges, UTF-8, escaped Unicode, duplicate
@@ -230,8 +250,9 @@ cc -std=c89 -pedantic -Wall -Wextra -Werror tests/native_json_harness.c -o nativ
 
 The unit tests use a fake transport and do not require OllyDbg. They also assert
 that the native source retains the local-only pipe, interruptible shutdown,
-pause sequencing, UI-thread dispatch, bounded parser and bounded response
-protections. A manual smoke test remains available when the plugin is loaded:
+pause sequencing, UI-thread dispatch, bounded parser, bounded response and
+bounded pagination protections. A manual smoke test remains available when the
+plugin is loaded:
 
 ```powershell
 python .\test_olly_bridge.py
@@ -245,7 +266,6 @@ and compiles the native parser harness with strict C89 warnings on Ubuntu.
 The native bridge remains intentionally small and compatible with OllyDbg 1.10.
 Remaining work includes:
 
-- adding pagination for unusually large module, thread and breakpoint tables
 - compiling and exercising the DLL in CI when a redistributable SDK-compatible
   build environment is available
 - adding automated integration tests against a real OllyDbg 1.10 instance
