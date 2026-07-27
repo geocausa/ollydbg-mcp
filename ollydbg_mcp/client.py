@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from typing import Any, Literal
 
 from .protocol import (
+    BridgeError,
     DEFAULT_PIPE_NAME,
     DEFAULT_TIMEOUT_SECONDS,
     MAX_DISASM_COUNT,
@@ -13,7 +14,6 @@ from .protocol import (
     PAUSE_REASON_FLAGS,
     PP_MAIN_MASK,
     STATUS_NAMES,
-    BridgeError,
     normalize_address,
     positive,
 )
