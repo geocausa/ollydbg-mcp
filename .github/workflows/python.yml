@@ -2,7 +2,7 @@ name: Python checks
 
 on:
   push:
-    branches: [main, hardening-v1]
+    branches: [main]
   pull_request:
 
 permissions:
@@ -23,6 +23,17 @@ jobs:
         with:
           version: "0.15.22"
           args: "check ."
+
+  native-json:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          show-progress: false
+      - name: Compile bounded JSON parser harness
+        run: cc -std=c89 -pedantic -Wall -Wextra -Werror tests/native_json_harness.c -o native_json_harness
+      - name: Run bounded JSON parser harness
+        run: ./native_json_harness
 
   test:
     runs-on: windows-latest
