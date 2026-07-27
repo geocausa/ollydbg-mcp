@@ -25,7 +25,7 @@
 #define OLLYBRIDGE_WM_EXEC (WM_APP + 0x110)
 #define OLLYBRIDGE_WM_REQUEST (WM_APP + 0x111)
 #define BRIDGE_PROTOCOL_VERSION 2
-#define BRIDGE_PLUGIN_VERSION "2.5"
+#define BRIDGE_PLUGIN_VERSION "2.6"
 #ifndef PIPE_REJECT_REMOTE_CLIENTS
 #define PIPE_REJECT_REMOTE_CLIENTS 0x00000008
 #endif
@@ -48,7 +48,6 @@ typedef int (cdecl *fn_insertname_t)(ulong addr, int type, char *name);
 typedef int (cdecl *fn_go_t)(ulong threadid, ulong tilladdr, int stepmode, int givechance, int backupregs);
 typedef t_status (cdecl *fn_getstatus_t)(void);
 typedef int (cdecl *fn_suspendprocess_t)(int processevents);
-typedef void (cdecl *fn_sendshortcut_t)(int where, ulong addr, int msg, int ctrl, int shift, int vkcode);
 
 static HINSTANCE g_instance = NULL;
 static HANDLE g_stop_event = NULL;
@@ -115,7 +114,6 @@ static fn_insertname_t g_insertname = NULL;
 static fn_go_t g_go = NULL;
 static fn_getstatus_t g_getstatus = NULL;
 static fn_suspendprocess_t g_suspendprocess = NULL;
-static fn_sendshortcut_t g_sendshortcut = NULL;
 
 static FARPROC resolve_export(const char *name) {
   HMODULE module = GetModuleHandleA("OLLYDBG.EXE");
@@ -144,7 +142,6 @@ static int bind_exports(void) {
   g_go = (fn_go_t)resolve_export("_Go");
   g_getstatus = (fn_getstatus_t)resolve_export("_Getstatus");
   g_suspendprocess = (fn_suspendprocess_t)resolve_export("_Suspendprocess");
-  g_sendshortcut = (fn_sendshortcut_t)resolve_export("_Sendshortcut");
   return g_addtolist != NULL && g_setcpu != NULL && g_readmemory != NULL &&
          g_writememory != NULL &&
          g_disasm != NULL && g_plugingetvalue != NULL &&
@@ -153,22 +150,13 @@ static int bind_exports(void) {
          g_setbreakpoint != NULL && g_deletebreakpoints != NULL &&
          g_sethardwarebreakpoint != NULL && g_deletehardwarebreakpoint != NULL &&
          g_insertname != NULL && g_go != NULL && g_getstatus != NULL &&
-         g_suspendprocess != NULL && g_sendshortcut != NULL;
+         g_suspendprocess != NULL;
 }
 
 static void log_line(const char *text) {
   if (g_addtolist != NULL) {
     g_addtolist(0, 0, "%s", text);
   }
-}
-
-static void dispatch_main_key(int vkcode) {
-  HWND main_window = (HWND)(ULONG_PTR)g_plugingetvalue(VAL_HWMAIN);
-  if (main_window != NULL) {
-    PostMessageA(main_window, WM_KEYDOWN, (WPARAM)vkcode, 0);
-    PostMessageA(main_window, WM_KEYUP, (WPARAM)vkcode, 0);
-  }
-  g_sendshortcut(PM_MAIN, 0, WM_KEYDOWN, 0, 0, vkcode);
 }
 
 static void execute_command_now(int command, ulong address, int give_chance) {
@@ -440,7 +428,7 @@ static void handle_status(char *out, size_t out_size) {
   LONG mutations_enabled =
       InterlockedCompareExchange(&g_mutations_enabled, 0, 0);
   snprintf(out, out_size,
-      "{\"ok\":true,\"protocol_version\":%d,\"plugin_version\":\"%s\",\"pipe\":\"\\\\\\\\.\\\\pipe\\\\OllyBridge110\",\"debug_status\":%d,\"last_pause_reason\":%ld,\"last_pause_reasonex\":%ld,\"last_pause_eip\":\"0x%08lX\",\"pause_sequence\":%ld,\"mutations_enabled\":%s,\"capabilities\":{\"native_wait_for_pause\":true,\"owner_only_pipe\":true,\"overlapped_pipe\":true,\"ui_thread_dispatch\":true,\"bounded_json_parser\":true,\"paged_tables\":true,\"client_drain_wait\":true,\"mutation_gate\":true,\"strict_native_values\":true,\"hardware_breakpoint_validation\":true,\"remote_clients\":false}}\n",
+      "{\"ok\":true,\"protocol_version\":%d,\"plugin_version\":\"%s\",\"pipe\":\"\\\\\\\\.\\\\pipe\\\\OllyBridge110\",\"debug_status\":%d,\"last_pause_reason\":%ld,\"last_pause_reasonex\":%ld,\"last_pause_eip\":\"0x%08lX\",\"pause_sequence\":%ld,\"mutations_enabled\":%s,\"capabilities\":{\"native_wait_for_pause\":true,\"owner_only_pipe\":true,\"overlapped_pipe\":true,\"ui_thread_dispatch\":true,\"bounded_json_parser\":true,\"paged_tables\":true,\"client_drain_wait\":true,\"mutation_gate\":true,\"strict_native_values\":true,\"hardware_breakpoint_validation\":true,\"execution_result_validation\":true,\"remote_clients\":false}}\n",
       BRIDGE_PROTOCOL_VERSION, BRIDGE_PLUGIN_VERSION, (int)g_getstatus(),
       g_last_pause_reason, g_last_pause_reasonex, (ulong)g_last_pause_eip,
       InterlockedCompareExchange(&g_pause_sequence, 0, 0),
@@ -1173,10 +1161,13 @@ static void handle_go_command(const char *json, char *out, size_t out_size, int 
       g_exec_request.debug_status);
 }
 
-static void handle_step_shortcut(char *out, size_t out_size, int vkcode, int stepmode) {
-  int command = (vkcode == VK_F7) ? EXEC_STEP_IN : EXEC_STEP_OVER;
+static void handle_step(char *out, size_t out_size, int command, int stepmode) {
   if (execute_on_ui_thread(command, 0, 0) != WAIT_OBJECT_0) {
     respond_stateful_error(out, out_size, "UI-thread step dispatch failed");
+    return;
+  }
+  if (g_exec_request.result != 0) {
+    respond_stateful_error(out, out_size, "Step failed");
     return;
   }
   snprintf(
@@ -1191,6 +1182,10 @@ static void handle_step_shortcut(char *out, size_t out_size, int vkcode, int ste
 static void handle_continue(char *out, size_t out_size) {
   if (execute_on_ui_thread(EXEC_CONTINUE, 0, 0) != WAIT_OBJECT_0) {
     respond_stateful_error(out, out_size, "UI-thread continue dispatch failed");
+    return;
+  }
+  if (g_exec_request.result != 0) {
+    respond_stateful_error(out, out_size, "Continue failed");
     return;
   }
   snprintf(
@@ -1297,10 +1292,10 @@ static void dispatch_request(const char *json, char *out, size_t out_size) {
     handle_go_command(json, out, out_size, STEP_RUN);
   }
   else if (strcmp(command, "step_into") == 0) {
-    handle_step_shortcut(out, out_size, VK_F7, STEP_IN);
+    handle_step(out, out_size, EXEC_STEP_IN, STEP_IN);
   }
   else if (strcmp(command, "step_over") == 0) {
-    handle_step_shortcut(out, out_size, VK_F8, STEP_OVER);
+    handle_step(out, out_size, EXEC_STEP_OVER, STEP_OVER);
   }
   else if (strcmp(command, "pause") == 0) {
     handle_pause(out, out_size);

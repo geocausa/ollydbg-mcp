@@ -34,6 +34,7 @@ request to the native bridge. Addresses are represented canonically as unsigned
 - complete module, thread and breakpoint enumeration through bounded pages
 - software and hardware breakpoint management
 - pause, continue, run, step and run-to-address helpers
+- native run, step and continue result validation
 - debugger operations marshalled through OllyDbg's UI thread
 - event-driven native pause sequencing with an automatic legacy fallback
 - strict bounded native JSON parsing with UTF-8 and Unicode-escape validation
@@ -369,8 +370,9 @@ deleted and is never uploaded.
 
 Source assertions retain the local-only pipe, interruptible shutdown,
 response-drain handshake, pause sequencing, UI-thread dispatch, bounded parser,
-strict native values, hardware-breakpoint validation, bounded response, bounded
-pagination, native-build and runtime-harness protections.
+strict native values, hardware-breakpoint validation, execution-result
+validation, bounded response, bounded pagination, native-build and runtime-harness
+protections.
 
 GitHub Actions runs linting and unit tests on Windows with Python 3.10 and 3.12,
 exercises the transport through real Windows named pipes, compiles both native
