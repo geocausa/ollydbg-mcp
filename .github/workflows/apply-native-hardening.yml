@@ -1,0 +1,41 @@
+name: Apply native hardening
+
+on:
+  push:
+    branches: [native-hardening-v2]
+    paths:
+      - tools/native_patch_protocol.py
+      - tools/native_patch_pipe.py
+      - .github/workflows/apply-native-hardening.yml
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: native-hardening-v2
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Apply checked source transformations
+        run: |
+          python tools/native_patch_protocol.py
+          python tools/native_patch_pipe.py
+          git diff --check
+      - name: Commit generated native source
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo "No native source changes were produced"
+            exit 1
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add plugin_stub/ollydbg110_bridge.c
+          git commit -m "Harden native pipe and pause protocol"
+          git push origin HEAD:native-hardening-v2
