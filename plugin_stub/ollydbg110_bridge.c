@@ -2,11 +2,16 @@
 #include <windows.h>
 #include <sddl.h>
 #include <ctype.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "Plugin.h"
+
+#if defined(_MSC_VER)
+#pragma comment(lib, "Advapi32.lib")
+#endif
 
 #define PIPE_NAME "\\\\.\\pipe\\OllyBridge110"
 #define PIPE_BUFFER_SIZE 8192
@@ -197,6 +202,27 @@ static int execute_on_ui_thread(int command, ulong address, int give_chance) {
     return WAIT_FAILED;
   }
   return (int)WaitForSingleObject(g_exec_request.done_event, 2000);
+}
+
+static int append_format(char *out, size_t out_size, size_t *used, const char *format, ...) {
+  int written;
+  size_t remaining;
+  va_list args;
+  if (out == NULL || used == NULL || format == NULL || out_size == 0 || *used >= out_size) return 0;
+  remaining = out_size - *used;
+  va_start(args, format);
+#if defined(_MSC_VER)
+  written = _vsnprintf(out + *used, remaining, format, args);
+#else
+  written = vsnprintf(out + *used, remaining, format, args);
+#endif
+  va_end(args);
+  if (written < 0 || (size_t)written >= remaining) {
+    out[out_size - 1] = '\0';
+    return 0;
+  }
+  *used += (size_t)written;
+  return 1;
 }
 
 static void json_escape_append(char *out, size_t out_size, size_t *used, const char *src) {
@@ -456,12 +482,17 @@ static void handle_read_memory(const char *json, char *out, size_t out_size) {
     return;
   }
 
-  used = (size_t)snprintf(out, out_size, "{\"ok\":true,\"address\":\"0x%08lX\",\"size\":%lu,\"hex\":\"", address, read);
-  for (index = 0; index < (int)read && used + 2 < out_size; index++) {
-    used += (size_t)snprintf(out + used, out_size - used, "%02X", buffer[index]);
+  if (!append_format(out, out_size, &used, "{\"ok\":true,\"address\":\"0x%08lX\",\"size\":%lu,\"hex\":\"", address, read)) {
+    free(buffer); respond_error(out, out_size, "Memory response exceeds pipe buffer"); return;
   }
-  snprintf(out + used, out_size - used, "\"}\n");
+  for (index = 0; index < (int)read; index++) {
+    if (!append_format(out, out_size, &used, "%02X", buffer[index])) {
+      free(buffer); respond_error(out, out_size, "Memory response exceeds pipe buffer"); return;
+    }
+  }
   free(buffer);
+  if (!append_format(out, out_size, &used, "\"}\n"))
+    respond_error(out, out_size, "Memory response exceeds pipe buffer");
 }
 
 static void handle_disasm(const char *json, char *out, size_t out_size) {
@@ -500,17 +531,15 @@ static void handle_disasm(const char *json, char *out, size_t out_size) {
     }
     escaped[0] = '\0';
     json_escape_append(escaped, sizeof(escaped), &escaped_used, disasm.result);
-    used += (size_t)snprintf(
-        out + used,
-        out_size - used,
+    if (!append_format(out, out_size, &used,
         "%s{\"address\":\"0x%08lX\",\"instruction\":\"%s\",\"size\":%lu}",
-        line_index == 0 ? "" : ",",
-        address,
-        escaped,
-        size);
+        line_index == 0 ? "" : ",", address, escaped, size)) {
+      respond_error(out, out_size, "Disassembly response exceeds pipe buffer"); return;
+    }
     address += size;
   }
-  snprintf(out + used, out_size - used, "]}\n");
+  if (!append_format(out, out_size, &used, "]}\n"))
+    respond_error(out, out_size, "Disassembly response exceeds pipe buffer");
 }
 
 static void handle_registers(char *out, size_t out_size) {
@@ -763,18 +792,16 @@ static void handle_list_hardware_breakpoints(char *out, size_t out_size) {
     if (!g_hardware_breakpoints_valid[index]) {
       continue;
     }
-    used += (size_t)snprintf(
-        out + used,
-        out_size - used,
+    if (!append_format(out, out_size, &used,
         "%s{\"index\":%d,\"address\":\"0x%08lX\",\"size\":%d,\"type\":%d}",
-        first ? "" : ",",
-        index,
-        g_hardware_breakpoints[index].addr,
-        g_hardware_breakpoints[index].size,
-        g_hardware_breakpoints[index].type);
+        first ? "" : ",", index, g_hardware_breakpoints[index].addr,
+        g_hardware_breakpoints[index].size, g_hardware_breakpoints[index].type)) {
+      respond_error(out, out_size, "Hardware breakpoint response exceeds pipe buffer"); return;
+    }
     first = 0;
   }
-  snprintf(out + used, out_size - used, "]}\n");
+  if (!append_format(out, out_size, &used, "]}\n"))
+    respond_error(out, out_size, "Hardware breakpoint response exceeds pipe buffer");
 }
 
 static void handle_write_memory(const char *json, char *out, size_t out_size) {
@@ -868,18 +895,15 @@ static void handle_list_breakpoints(char *out, size_t out_size) {
   used = (size_t)snprintf(out, out_size, "{\"ok\":true,\"count\":%d,\"breakpoints\":[", table->data.n);
   for (index = 0; index < table->data.n && used + 128 < out_size; index++) {
     t_bpoint *bp = (t_bpoint *)((char *)table->data.data + (table->data.itemsize * index));
-    used += (size_t)snprintf(
-        out + used,
-        out_size - used,
+    if (!append_format(out, out_size, &used,
         "%s{\"index\":%d,\"address\":\"0x%08lX\",\"type\":\"0x%08lX\",\"cmd\":\"0x%02X\",\"passcount\":%lu}",
-        index == 0 ? "" : ",",
-        index,
-        bp->addr,
-        bp->type,
-        (unsigned char)bp->cmd,
-        bp->passcount);
+        index == 0 ? "" : ",", index, bp->addr, bp->type,
+        (unsigned char)bp->cmd, bp->passcount)) {
+      respond_error(out, out_size, "Breakpoint response exceeds pipe buffer"); return;
+    }
   }
-  snprintf(out + used, out_size - used, "]}\n");
+  if (!append_format(out, out_size, &used, "]}\n"))
+    respond_error(out, out_size, "Breakpoint response exceeds pipe buffer");
 }
 
 static void handle_list_modules(char *out, size_t out_size) {
@@ -907,19 +931,15 @@ static void handle_list_modules(char *out, size_t out_size) {
     path_escaped[0] = '\0';
     json_escape_append(name_escaped, sizeof(name_escaped), &name_used, name);
     json_escape_append(path_escaped, sizeof(path_escaped), &path_used, path);
-    used += (size_t)snprintf(
-        out + used,
-        out_size - used,
+    if (!append_format(out, out_size, &used,
         "%s{\"index\":%d,\"name\":\"%s\",\"path\":\"%s\",\"base\":\"0x%08lX\",\"size\":\"0x%08lX\",\"entry\":\"0x%08lX\"}",
-        index == 0 ? "" : ",",
-        index,
-        name_escaped,
-        path_escaped,
-        mod->base,
-        mod->size,
-        mod->entry);
+        index == 0 ? "" : ",", index, name_escaped, path_escaped,
+        mod->base, mod->size, mod->entry)) {
+      respond_error(out, out_size, "Module response exceeds pipe buffer"); return;
+    }
   }
-  snprintf(out + used, out_size - used, "]}\n");
+  if (!append_format(out, out_size, &used, "]}\n"))
+    respond_error(out, out_size, "Module response exceeds pipe buffer");
 }
 
 static void handle_list_threads(char *out, size_t out_size) {
@@ -934,21 +954,16 @@ static void handle_list_threads(char *out, size_t out_size) {
   used = (size_t)snprintf(out, out_size, "{\"ok\":true,\"count\":%d,\"cpu_thread_id\":\"0x%08lX\",\"threads\":[", table->data.n, cpu_thread_id);
   for (index = 0; index < table->data.n && used + 256 < out_size; index++) {
     t_thread *thr = (t_thread *)((char *)table->data.data + (table->data.itemsize * index));
-    used += (size_t)snprintf(
-        out + used,
-        out_size - used,
+    if (!append_format(out, out_size, &used,
         "%s{\"index\":%d,\"thread_id\":\"0x%08lX\",\"entry\":\"0x%08lX\",\"stacktop\":\"0x%08lX\",\"stackbottom\":\"0x%08lX\",\"suspendcount\":%d,\"regvalid\":%s,\"eip\":\"0x%08lX\"}",
-        index == 0 ? "" : ",",
-        index,
-        thr->threadid,
-        thr->entry,
-        thr->stacktop,
-        thr->stackbottom,
-        thr->suspendcount,
-        thr->regvalid ? "true" : "false",
-        thr->reg.ip);
+        index == 0 ? "" : ",", index, thr->threadid, thr->entry,
+        thr->stacktop, thr->stackbottom, thr->suspendcount,
+        thr->regvalid ? "true" : "false", thr->reg.ip)) {
+      respond_error(out, out_size, "Thread response exceeds pipe buffer"); return;
+    }
   }
-  snprintf(out + used, out_size - used, "]}\n");
+  if (!append_format(out, out_size, &used, "]}\n"))
+    respond_error(out, out_size, "Thread response exceeds pipe buffer");
 }
 
 static void handle_set_name(const char *json, char *out, size_t out_size, int name_type) {
