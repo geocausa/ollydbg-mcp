@@ -38,12 +38,16 @@ jobs:
   native-dll:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-        with:
-          show-progress: false
       - uses: ilammy/msvc-dev-cmd@v1
         with:
           arch: x86
+      - name: Fetch exact commit quietly
+        shell: powershell
+        run: |
+          git init -q
+          git remote add origin "https://github.com/$env:GITHUB_REPOSITORY.git"
+          git fetch -q --depth=1 origin $env:GITHUB_SHA
+          git checkout -q FETCH_HEAD
       - name: Compile, link and inspect the 32-bit DLL
         shell: powershell
         run: |
