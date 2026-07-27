@@ -4,9 +4,10 @@ import argparse
 import json
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any, Callable, Protocol
+from typing import Any, Protocol
 
 from .client import OllyBridgeClient
 from .protocol import DEFAULT_PIPE_NAME, BridgeError, normalize_address, positive
