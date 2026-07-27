@@ -5,11 +5,13 @@ on:
     branches: [ui-thread-hardening-v3]
     paths:
       - tools/apply_ui_thread.py
+      - tools/prepare_ui_thread_patch.py
       - .github/workflows/apply-ui-thread.yml
   pull_request:
     branches: [main]
     paths:
       - tools/apply_ui_thread.py
+      - tools/prepare_ui_thread_patch.py
       - .github/workflows/apply-ui-thread.yml
 
 permissions:
@@ -39,6 +41,7 @@ jobs:
           if grep -q 'static int execute_request_on_ui_thread(' "$source_file"; then
             echo "UI-thread marshalling already applied"
           else
+            python tools/prepare_ui_thread_patch.py
             python tools/apply_ui_thread.py
           fi
           git diff --check
@@ -46,6 +49,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          git checkout -- tools/apply_ui_thread.py
           if git diff --quiet; then
             echo "Generated source is already up to date"
             exit 0
