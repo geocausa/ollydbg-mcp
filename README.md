@@ -34,11 +34,15 @@ request to the native bridge. Addresses are represented canonically as unsigned
 - module, thread and breakpoint enumeration
 - software and hardware breakpoint management
 - pause, continue, run, step and run-to-address helpers
+- event-driven native pause sequencing with an automatic legacy fallback
 - address lookup, labels and comments
 - guarded debuggee-memory writes
 - combined debugger snapshots
-- bridge capability reporting
-- bounded local named-pipe waits and serialized requests
+- bridge capability and protocol-version reporting
+- bounded native response construction
+- serialized Python requests with bounded response waits
+- owner-restricted, local-only named-pipe access
+- interruptible overlapped pipe I/O for clean plugin shutdown
 
 ## Safety defaults
 
@@ -51,9 +55,10 @@ confirmation:
 
 Session preparation no longer clears breakpoints by default.
 
-The confirmation checks are enforced by the Python MCP server. The current
-native plugin protocol is local-only but does not yet implement authentication.
-Do not expose the MCP server or named pipe to untrusted users.
+The native pipe rejects remote clients and applies an owner-only Windows access
+rule. This reduces accidental cross-user access, but it is not a substitute for
+running the debugger and MCP server under a trusted Windows account. Do not
+expose the MCP server to untrusted networks or users.
 
 ## Requirements
 
@@ -116,6 +121,10 @@ Build a 32-bit `OllyBridge110.dll` against the OllyDbg 1.10 SDK. The build must:
 - use the structure packing and unsigned-character settings required by the SDK
 - export the OllyDbg plugin entry points
 - produce a 32-bit DLL
+- link the Windows `Advapi32` library for the owner-only pipe security descriptor
+
+MSVC builds receive the `Advapi32` link directive from the source. Other
+Windows toolchains may need the library added explicitly to their linker flags.
 
 Copy the DLL into the plugin directory configured by `ollydbg.ini` and restart
 OllyDbg.
@@ -204,8 +213,10 @@ python -m ruff check .
 python -m pytest
 ```
 
-The unit tests use a fake transport and do not require OllyDbg. A manual smoke
-test remains available when the plugin is loaded:
+The unit tests use a fake transport and do not require OllyDbg. They also assert
+that the native source retains the local-only pipe, interruptible shutdown,
+pause sequencing and bounded response protections. A manual smoke test remains
+available when the plugin is loaded:
 
 ```powershell
 python .\test_olly_bridge.py
@@ -216,17 +227,18 @@ GitHub Actions runs linting and unit tests on Windows with Python 3.10 and 3.12.
 ## Current native limitations
 
 The native bridge remains intentionally small and compatible with OllyDbg 1.10.
-Remaining hardening work includes:
+Remaining work includes:
 
-- replacing the handwritten JSON parser with a real bounded parser
-- making all native response construction truncation-safe
+- replacing the minimal field extractor with a complete bounded JSON parser
 - marshalling every OllyDbg API call onto the debugger UI thread
-- adding an event-driven native pause sequence
-- using overlapped named-pipe I/O for immediate plugin shutdown
-- restricting the pipe ACL to the current interactive user
+- adding pagination for unusually large module, thread and breakpoint tables
+- compiling and exercising the DLL in CI when a redistributable SDK-compatible
+  build environment is available
+- adding automated integration tests against a real OllyDbg 1.10 instance
 
-These items should be completed before treating the bridge as suitable for
-hostile inputs or unattended long-running use.
+The current bridge is substantially safer for normal local use, but it should
+still be treated as trusted-user debugger automation rather than a hardened
+service for hostile inputs.
 
 ## License
 

@@ -1,16 +1,27 @@
 #define STRICT
 #include <windows.h>
+#include <sddl.h>
 #include <ctype.h>
+#include <stdarg.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 
 #include "Plugin.h"
 
+#if defined(_MSC_VER)
+#pragma comment(lib, "Advapi32.lib")
+#endif
+
 #define PIPE_NAME "\\\\.\\pipe\\OllyBridge110"
 #define PIPE_BUFFER_SIZE 8192
 #define OLLYBRIDGE_WINDOW_CLASS "OllyBridge110Window"
 #define OLLYBRIDGE_WM_EXEC (WM_APP + 0x110)
+#define BRIDGE_PROTOCOL_VERSION 2
+#define BRIDGE_PLUGIN_VERSION "2.0"
+#ifndef PIPE_REJECT_REMOTE_CLIENTS
+#define PIPE_REJECT_REMOTE_CLIENTS 0x00000008
+#endif
 
 typedef int (cdecl *fn_addtolist_t)(ulong addr, int highlight, const char *format, ...);
 typedef void (cdecl *fn_setcpu_t)(ulong threadid, ulong asmaddr, ulong dumpaddr, ulong stackaddr, int mode);
@@ -35,11 +46,13 @@ typedef void (cdecl *fn_sendshortcut_t)(int where, ulong addr, int msg, int ctrl
 static HINSTANCE g_instance = NULL;
 static HANDLE g_stop_event = NULL;
 static HANDLE g_pipe_thread = NULL;
+static HANDLE g_pause_event = NULL;
 static volatile LONG g_running = 0;
 static HWND g_command_window = NULL;
 static volatile LONG g_last_pause_reason = 0;
 static volatile LONG g_last_pause_reasonex = 0;
 static volatile ULONG_PTR g_last_pause_eip = 0;
+static volatile LONG g_pause_sequence = 0;
 static t_hardbpoint g_hardware_breakpoints[4];
 static int g_hardware_breakpoints_valid[4] = {0, 0, 0, 0};
 
@@ -191,6 +204,27 @@ static int execute_on_ui_thread(int command, ulong address, int give_chance) {
   return (int)WaitForSingleObject(g_exec_request.done_event, 2000);
 }
 
+static int append_format(char *out, size_t out_size, size_t *used, const char *format, ...) {
+  int written;
+  size_t remaining;
+  va_list args;
+  if (out == NULL || used == NULL || format == NULL || out_size == 0 || *used >= out_size) return 0;
+  remaining = out_size - *used;
+  va_start(args, format);
+#if defined(_MSC_VER)
+  written = _vsnprintf(out + *used, remaining, format, args);
+#else
+  written = vsnprintf(out + *used, remaining, format, args);
+#endif
+  va_end(args);
+  if (written < 0 || (size_t)written >= remaining) {
+    out[out_size - 1] = '\0';
+    return 0;
+  }
+  *used += (size_t)written;
+  return 1;
+}
+
 static void json_escape_append(char *out, size_t out_size, size_t *used, const char *src) {
   while (*src != '\0' && *used + 2 < out_size) {
     char ch = *src++;
@@ -264,38 +298,34 @@ static int parse_hex_bytes(const char *text, unsigned char *out, int max_bytes) 
 
 static int extract_string_field(const char *json, const char *field, char *out, size_t out_size) {
   char needle[64];
-  const char *start;
-  const char *end;
-  size_t length;
-
+  const char *cursor;
+  size_t used = 0;
+  if (json == NULL || field == NULL || out == NULL || out_size == 0) return 0;
   snprintf(needle, sizeof(needle), "\"%s\"", field);
-  start = strstr(json, needle);
-  if (start == NULL) {
-    return 0;
+  cursor = strstr(json, needle);
+  if (cursor == NULL) return 0;
+  cursor = strchr(cursor + strlen(needle), ':');
+  if (cursor == NULL) return 0;
+  cursor++;
+  while (*cursor == ' ' || *cursor == '\t' || *cursor == '\r' || *cursor == '\n') cursor++;
+  if (*cursor++ != '"') return 0;
+  while (*cursor != '\0') {
+    char ch = *cursor++;
+    if (ch == '"') { out[used] = '\0'; return 1; }
+    if (ch == '\\') {
+      ch = *cursor++;
+      if (ch == '\0' || ch == 'u') return 0;
+      if (ch == 'b') ch = '\b';
+      else if (ch == 'f') ch = '\f';
+      else if (ch == 'n') ch = '\n';
+      else if (ch == 'r') ch = '\r';
+      else if (ch == 't') ch = '\t';
+      else if (!(ch == '"' || ch == '\\' || ch == '/')) return 0;
+    }
+    if (used + 1 >= out_size) return 0;
+    out[used++] = ch;
   }
-  start = strchr(start + strlen(needle), ':');
-  if (start == NULL) {
-    return 0;
-  }
-  start++;
-  while (*start == ' ' || *start == '\t') {
-    start++;
-  }
-  if (*start != '"') {
-    return 0;
-  }
-  start++;
-  end = strchr(start, '"');
-  if (end == NULL) {
-    return 0;
-  }
-  length = (size_t)(end - start);
-  if (length >= out_size) {
-    length = out_size - 1;
-  }
-  memcpy(out, start, length);
-  out[length] = '\0';
-  return 1;
+  return 0;
 }
 
 static int extract_int_field(const char *json, const char *field, int *value) {
@@ -373,14 +403,40 @@ static void respond_stateful_error(char *out, size_t out_size, const char *messa
 }
 
 static void handle_status(char *out, size_t out_size) {
-  snprintf(
-      out,
-      out_size,
-      "{\"ok\":true,\"pipe\":\"\\\\\\\\.\\\\pipe\\\\OllyBridge110\",\"debug_status\":%d,\"last_pause_reason\":%ld,\"last_pause_reasonex\":%ld,\"last_pause_eip\":\"0x%08lX\"}\n",
-      (int)g_getstatus(),
-      g_last_pause_reason,
-      g_last_pause_reasonex,
-      (ulong)g_last_pause_eip);
+  snprintf(out, out_size,
+      "{\"ok\":true,\"protocol_version\":%d,\"plugin_version\":\"%s\",\"pipe\":\"\\\\\\\\.\\\\pipe\\\\OllyBridge110\",\"debug_status\":%d,\"last_pause_reason\":%ld,\"last_pause_reasonex\":%ld,\"last_pause_eip\":\"0x%08lX\",\"pause_sequence\":%ld,\"capabilities\":{\"native_wait_for_pause\":true,\"owner_only_pipe\":true,\"overlapped_pipe\":true,\"remote_clients\":false}}\n",
+      BRIDGE_PROTOCOL_VERSION, BRIDGE_PLUGIN_VERSION, (int)g_getstatus(),
+      g_last_pause_reason, g_last_pause_reasonex, (ulong)g_last_pause_eip,
+      InterlockedCompareExchange(&g_pause_sequence, 0, 0));
+}
+
+static void handle_wait_for_pause(const char *json, char *out, size_t out_size) {
+  int after_sequence = (int)InterlockedCompareExchange(&g_pause_sequence, 0, 0);
+  int timeout_ms = 5000;
+  DWORD started = GetTickCount();
+  HANDLE waits[2];
+  extract_int_field(json, "after_sequence", &after_sequence);
+  extract_int_field(json, "timeout_ms", &timeout_ms);
+  if (after_sequence < 0 || timeout_ms <= 0 || timeout_ms > 300000) {
+    respond_error(out, out_size, "Invalid pause wait parameters"); return;
+  }
+  waits[0] = g_stop_event; waits[1] = g_pause_event;
+  for (;;) {
+    LONG seq = InterlockedCompareExchange(&g_pause_sequence, 0, 0);
+    DWORD elapsed, wr;
+    if (seq > after_sequence) { handle_status(out, out_size); return; }
+    elapsed = GetTickCount() - started;
+    if (elapsed >= (DWORD)timeout_ms) {
+      snprintf(out, out_size, "{\"ok\":false,\"timed_out\":true,\"error\":\"Timed out waiting for OllyDbg to pause\",\"pause_sequence\":%ld}\n", seq); return;
+    }
+    wr = WaitForMultipleObjects(2, waits, FALSE, (DWORD)timeout_ms - elapsed);
+    if (wr == WAIT_OBJECT_0) { respond_error(out, out_size, "Plugin is shutting down"); return; }
+    if (wr == WAIT_TIMEOUT) {
+      seq = InterlockedCompareExchange(&g_pause_sequence, 0, 0);
+      snprintf(out, out_size, "{\"ok\":false,\"timed_out\":true,\"error\":\"Timed out waiting for OllyDbg to pause\",\"pause_sequence\":%ld}\n", seq); return;
+    }
+    if (wr != WAIT_OBJECT_0 + 1) { respond_error(out, out_size, "Pause wait failed"); return; }
+  }
 }
 
 static void handle_goto(const char *json, char *out, size_t out_size) {
@@ -426,12 +482,17 @@ static void handle_read_memory(const char *json, char *out, size_t out_size) {
     return;
   }
 
-  used = (size_t)snprintf(out, out_size, "{\"ok\":true,\"address\":\"0x%08lX\",\"size\":%lu,\"hex\":\"", address, read);
-  for (index = 0; index < (int)read && used + 2 < out_size; index++) {
-    used += (size_t)snprintf(out + used, out_size - used, "%02X", buffer[index]);
+  if (!append_format(out, out_size, &used, "{\"ok\":true,\"address\":\"0x%08lX\",\"size\":%lu,\"hex\":\"", address, read)) {
+    free(buffer); respond_error(out, out_size, "Memory response exceeds pipe buffer"); return;
   }
-  snprintf(out + used, out_size - used, "\"}\n");
+  for (index = 0; index < (int)read; index++) {
+    if (!append_format(out, out_size, &used, "%02X", buffer[index])) {
+      free(buffer); respond_error(out, out_size, "Memory response exceeds pipe buffer"); return;
+    }
+  }
   free(buffer);
+  if (!append_format(out, out_size, &used, "\"}\n"))
+    respond_error(out, out_size, "Memory response exceeds pipe buffer");
 }
 
 static void handle_disasm(const char *json, char *out, size_t out_size) {
@@ -470,17 +531,15 @@ static void handle_disasm(const char *json, char *out, size_t out_size) {
     }
     escaped[0] = '\0';
     json_escape_append(escaped, sizeof(escaped), &escaped_used, disasm.result);
-    used += (size_t)snprintf(
-        out + used,
-        out_size - used,
+    if (!append_format(out, out_size, &used,
         "%s{\"address\":\"0x%08lX\",\"instruction\":\"%s\",\"size\":%lu}",
-        line_index == 0 ? "" : ",",
-        address,
-        escaped,
-        size);
+        line_index == 0 ? "" : ",", address, escaped, size)) {
+      respond_error(out, out_size, "Disassembly response exceeds pipe buffer"); return;
+    }
     address += size;
   }
-  snprintf(out + used, out_size - used, "]}\n");
+  if (!append_format(out, out_size, &used, "]}\n"))
+    respond_error(out, out_size, "Disassembly response exceeds pipe buffer");
 }
 
 static void handle_registers(char *out, size_t out_size) {
@@ -733,18 +792,16 @@ static void handle_list_hardware_breakpoints(char *out, size_t out_size) {
     if (!g_hardware_breakpoints_valid[index]) {
       continue;
     }
-    used += (size_t)snprintf(
-        out + used,
-        out_size - used,
+    if (!append_format(out, out_size, &used,
         "%s{\"index\":%d,\"address\":\"0x%08lX\",\"size\":%d,\"type\":%d}",
-        first ? "" : ",",
-        index,
-        g_hardware_breakpoints[index].addr,
-        g_hardware_breakpoints[index].size,
-        g_hardware_breakpoints[index].type);
+        first ? "" : ",", index, g_hardware_breakpoints[index].addr,
+        g_hardware_breakpoints[index].size, g_hardware_breakpoints[index].type)) {
+      respond_error(out, out_size, "Hardware breakpoint response exceeds pipe buffer"); return;
+    }
     first = 0;
   }
-  snprintf(out + used, out_size - used, "]}\n");
+  if (!append_format(out, out_size, &used, "]}\n"))
+    respond_error(out, out_size, "Hardware breakpoint response exceeds pipe buffer");
 }
 
 static void handle_write_memory(const char *json, char *out, size_t out_size) {
@@ -838,18 +895,15 @@ static void handle_list_breakpoints(char *out, size_t out_size) {
   used = (size_t)snprintf(out, out_size, "{\"ok\":true,\"count\":%d,\"breakpoints\":[", table->data.n);
   for (index = 0; index < table->data.n && used + 128 < out_size; index++) {
     t_bpoint *bp = (t_bpoint *)((char *)table->data.data + (table->data.itemsize * index));
-    used += (size_t)snprintf(
-        out + used,
-        out_size - used,
+    if (!append_format(out, out_size, &used,
         "%s{\"index\":%d,\"address\":\"0x%08lX\",\"type\":\"0x%08lX\",\"cmd\":\"0x%02X\",\"passcount\":%lu}",
-        index == 0 ? "" : ",",
-        index,
-        bp->addr,
-        bp->type,
-        (unsigned char)bp->cmd,
-        bp->passcount);
+        index == 0 ? "" : ",", index, bp->addr, bp->type,
+        (unsigned char)bp->cmd, bp->passcount)) {
+      respond_error(out, out_size, "Breakpoint response exceeds pipe buffer"); return;
+    }
   }
-  snprintf(out + used, out_size - used, "]}\n");
+  if (!append_format(out, out_size, &used, "]}\n"))
+    respond_error(out, out_size, "Breakpoint response exceeds pipe buffer");
 }
 
 static void handle_list_modules(char *out, size_t out_size) {
@@ -877,19 +931,15 @@ static void handle_list_modules(char *out, size_t out_size) {
     path_escaped[0] = '\0';
     json_escape_append(name_escaped, sizeof(name_escaped), &name_used, name);
     json_escape_append(path_escaped, sizeof(path_escaped), &path_used, path);
-    used += (size_t)snprintf(
-        out + used,
-        out_size - used,
+    if (!append_format(out, out_size, &used,
         "%s{\"index\":%d,\"name\":\"%s\",\"path\":\"%s\",\"base\":\"0x%08lX\",\"size\":\"0x%08lX\",\"entry\":\"0x%08lX\"}",
-        index == 0 ? "" : ",",
-        index,
-        name_escaped,
-        path_escaped,
-        mod->base,
-        mod->size,
-        mod->entry);
+        index == 0 ? "" : ",", index, name_escaped, path_escaped,
+        mod->base, mod->size, mod->entry)) {
+      respond_error(out, out_size, "Module response exceeds pipe buffer"); return;
+    }
   }
-  snprintf(out + used, out_size - used, "]}\n");
+  if (!append_format(out, out_size, &used, "]}\n"))
+    respond_error(out, out_size, "Module response exceeds pipe buffer");
 }
 
 static void handle_list_threads(char *out, size_t out_size) {
@@ -904,21 +954,16 @@ static void handle_list_threads(char *out, size_t out_size) {
   used = (size_t)snprintf(out, out_size, "{\"ok\":true,\"count\":%d,\"cpu_thread_id\":\"0x%08lX\",\"threads\":[", table->data.n, cpu_thread_id);
   for (index = 0; index < table->data.n && used + 256 < out_size; index++) {
     t_thread *thr = (t_thread *)((char *)table->data.data + (table->data.itemsize * index));
-    used += (size_t)snprintf(
-        out + used,
-        out_size - used,
+    if (!append_format(out, out_size, &used,
         "%s{\"index\":%d,\"thread_id\":\"0x%08lX\",\"entry\":\"0x%08lX\",\"stacktop\":\"0x%08lX\",\"stackbottom\":\"0x%08lX\",\"suspendcount\":%d,\"regvalid\":%s,\"eip\":\"0x%08lX\"}",
-        index == 0 ? "" : ",",
-        index,
-        thr->threadid,
-        thr->entry,
-        thr->stacktop,
-        thr->stackbottom,
-        thr->suspendcount,
-        thr->regvalid ? "true" : "false",
-        thr->reg.ip);
+        index == 0 ? "" : ",", index, thr->threadid, thr->entry,
+        thr->stacktop, thr->stackbottom, thr->suspendcount,
+        thr->regvalid ? "true" : "false", thr->reg.ip)) {
+      respond_error(out, out_size, "Thread response exceeds pipe buffer"); return;
+    }
   }
-  snprintf(out + used, out_size - used, "]}\n");
+  if (!append_format(out, out_size, &used, "]}\n"))
+    respond_error(out, out_size, "Thread response exceeds pipe buffer");
 }
 
 static void handle_set_name(const char *json, char *out, size_t out_size, int name_type) {
@@ -1023,6 +1068,9 @@ static void dispatch_request(const char *json, char *out, size_t out_size) {
   if (strcmp(command, "status") == 0) {
     handle_status(out, out_size);
   }
+  else if (strcmp(command, "wait_for_pause") == 0) {
+    handle_wait_for_pause(json, out, out_size);
+  }
   else if (strcmp(command, "goto") == 0) {
     handle_goto(json, out, out_size);
   }
@@ -1106,46 +1154,75 @@ static void dispatch_request(const char *json, char *out, size_t out_size) {
   }
 }
 
+static int wait_for_pipe_io(HANDLE pipe, OVERLAPPED *ov, DWORD *done) {
+  HANDLE waits[2]; DWORD wr;
+  waits[0] = g_stop_event; waits[1] = ov->hEvent;
+  wr = WaitForMultipleObjects(2, waits, FALSE, INFINITE);
+  if (wr == WAIT_OBJECT_0) {
+    CancelIo(pipe); WaitForSingleObject(ov->hEvent, 1000); return 0;
+  }
+  if (wr != WAIT_OBJECT_0 + 1) return 0;
+  return GetOverlappedResult(pipe, ov, done, FALSE) != 0;
+}
+
+static int connect_pipe_overlapped(HANDLE pipe, OVERLAPPED *ov) {
+  DWORD done = 0; ResetEvent(ov->hEvent);
+  if (ConnectNamedPipe(pipe, ov)) return 1;
+  if (GetLastError() == ERROR_PIPE_CONNECTED) return 1;
+  if (GetLastError() != ERROR_IO_PENDING) return 0;
+  return wait_for_pipe_io(pipe, ov, &done);
+}
+
+static int read_pipe_overlapped(HANDLE pipe, void *buf, DWORD size, DWORD *read, OVERLAPPED *ov) {
+  ResetEvent(ov->hEvent); *read = 0;
+  if (ReadFile(pipe, buf, size, read, ov)) return 1;
+  if (GetLastError() != ERROR_IO_PENDING) return 0;
+  return wait_for_pipe_io(pipe, ov, read);
+}
+
+static int write_pipe_overlapped(HANDLE pipe, const void *buf, DWORD size, DWORD *written, OVERLAPPED *ov) {
+  ResetEvent(ov->hEvent); *written = 0;
+  if (WriteFile(pipe, buf, size, written, ov)) return 1;
+  if (GetLastError() != ERROR_IO_PENDING) return 0;
+  return wait_for_pipe_io(pipe, ov, written);
+}
+
 static DWORD WINAPI pipe_thread_main(LPVOID param) {
-  (void)param;
+  SECURITY_ATTRIBUTES sa; PSECURITY_DESCRIPTOR sd = NULL;
+  (void)param; ZeroMemory(&sa, sizeof(sa)); sa.nLength = sizeof(sa);
+  if (!ConvertStringSecurityDescriptorToSecurityDescriptorA(
+          "D:P(A;;GA;;;OW)", SDDL_REVISION_1, &sd, NULL)) {
+    log_line("OllyBridge110: unable to create owner-only pipe ACL"); return 1;
+  }
+  sa.lpSecurityDescriptor = sd;
   InterlockedExchange(&g_running, 1);
   while (WaitForSingleObject(g_stop_event, 0) == WAIT_TIMEOUT) {
-    HANDLE pipe = CreateNamedPipeA(
-        PIPE_NAME,
-        PIPE_ACCESS_DUPLEX,
-        PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT,
-        1,
-        PIPE_BUFFER_SIZE,
-        PIPE_BUFFER_SIZE,
-        250,
-        NULL);
+    HANDLE pipe; OVERLAPPED ov; char request[PIPE_BUFFER_SIZE];
+    char response[PIPE_BUFFER_SIZE]; DWORD read = 0, written = 0;
+    ZeroMemory(&ov, sizeof(ov)); ov.hEvent = CreateEventA(NULL, TRUE, FALSE, NULL);
+    if (ov.hEvent == NULL) break;
+    pipe = CreateNamedPipeA(PIPE_NAME, PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
+        PIPE_TYPE_BYTE | PIPE_READMODE_BYTE | PIPE_WAIT | PIPE_REJECT_REMOTE_CLIENTS,
+        1, PIPE_BUFFER_SIZE, PIPE_BUFFER_SIZE, 250, &sa);
     if (pipe == INVALID_HANDLE_VALUE) {
-      Sleep(250);
+      CloseHandle(ov.hEvent);
+      if (WaitForSingleObject(g_stop_event, 250) == WAIT_OBJECT_0) break;
       continue;
     }
-
-    if (ConnectNamedPipe(pipe, NULL) || GetLastError() == ERROR_PIPE_CONNECTED) {
-      char request[PIPE_BUFFER_SIZE];
-      char response[PIPE_BUFFER_SIZE];
-      DWORD read = 0;
-      DWORD written = 0;
-      ZeroMemory(request, sizeof(request));
-      ZeroMemory(response, sizeof(response));
-      if (ReadFile(pipe, request, sizeof(request) - 1, &read, NULL) && read > 0) {
-        request[read] = '\0';
-        dispatch_request(request, response, sizeof(response));
+    if (connect_pipe_overlapped(pipe, &ov)) {
+      ZeroMemory(request, sizeof(request)); ZeroMemory(response, sizeof(response));
+      if (read_pipe_overlapped(pipe, request, sizeof(request) - 1, &read, &ov) && read > 0) {
+        request[read] = '\0'; dispatch_request(request, response, sizeof(response));
       }
-      else {
+      else if (WaitForSingleObject(g_stop_event, 0) != WAIT_OBJECT_0) {
         respond_error(response, sizeof(response), "Failed to read from pipe");
       }
-      WriteFile(pipe, response, (DWORD)strlen(response), &written, NULL);
-      FlushFileBuffers(pipe);
+      if (response[0] != '\0' && WaitForSingleObject(g_stop_event, 0) != WAIT_OBJECT_0)
+        write_pipe_overlapped(pipe, response, (DWORD)strlen(response), &written, &ov);
     }
-    DisconnectNamedPipe(pipe);
-    CloseHandle(pipe);
+    DisconnectNamedPipe(pipe); CloseHandle(pipe); CloseHandle(ov.hEvent);
   }
-  InterlockedExchange(&g_running, 0);
-  return 0;
+  InterlockedExchange(&g_running, 0); LocalFree(sd); return 0;
 }
 
 BOOL WINAPI DllMain(HINSTANCE instance, DWORD reason, LPVOID reserved) {
@@ -1194,14 +1271,18 @@ extc __declspec(dllexport) int cdecl _ODBG_Plugininit(int ollydbgversion, HWND h
   }
   g_exec_request.done_event = CreateEventA(NULL, TRUE, FALSE, NULL);
   if (g_exec_request.done_event == NULL) {
-    DestroyWindow(g_command_window);
-    g_command_window = NULL;
-    return -1;
+    DestroyWindow(g_command_window); g_command_window = NULL; return -1;
+  }
+  g_pause_event = CreateEventA(NULL, FALSE, FALSE, NULL);
+  if (g_pause_event == NULL) {
+    CloseHandle(g_exec_request.done_event); g_exec_request.done_event = NULL;
+    DestroyWindow(g_command_window); g_command_window = NULL; return -1;
   }
   log_line("OllyBridge110 plugin loaded");
   log_line("  Named pipe: \\\\.\\pipe\\OllyBridge110");
   g_stop_event = CreateEventA(NULL, TRUE, FALSE, NULL);
   if (g_stop_event == NULL) {
+    CloseHandle(g_pause_event); g_pause_event = NULL;
     CloseHandle(g_exec_request.done_event);
     g_exec_request.done_event = NULL;
     DestroyWindow(g_command_window);
@@ -1212,6 +1293,7 @@ extc __declspec(dllexport) int cdecl _ODBG_Plugininit(int ollydbgversion, HWND h
   if (g_pipe_thread == NULL) {
     CloseHandle(g_stop_event);
     g_stop_event = NULL;
+    CloseHandle(g_pause_event); g_pause_event = NULL;
     CloseHandle(g_exec_request.done_event);
     g_exec_request.done_event = NULL;
     DestroyWindow(g_command_window);
@@ -1247,6 +1329,8 @@ extc __declspec(dllexport) int cdecl _ODBG_Paused(int reason, t_reg *reg) {
   g_last_pause_reason = reason;
   g_last_pause_reasonex = reason;
   g_last_pause_eip = (reg != NULL) ? reg->ip : 0;
+  InterlockedIncrement(&g_pause_sequence);
+  if (g_pause_event != NULL) SetEvent(g_pause_event);
   return 0;
 }
 
@@ -1256,6 +1340,8 @@ extc __declspec(dllexport) int cdecl _ODBG_Pausedex(int reasonex, int dummy, t_r
   g_last_pause_reason = (reasonex & PP_MAIN);
   g_last_pause_reasonex = reasonex;
   g_last_pause_eip = (reg != NULL) ? reg->ip : 0;
+  InterlockedIncrement(&g_pause_sequence);
+  if (g_pause_event != NULL) SetEvent(g_pause_event);
   return 0;
 }
 
@@ -1264,13 +1350,16 @@ extc __declspec(dllexport) void cdecl _ODBG_Plugindestroy(void) {
     SetEvent(g_stop_event);
   }
   if (g_pipe_thread != NULL) {
-    WaitForSingleObject(g_pipe_thread, 1500);
+    WaitForSingleObject(g_pipe_thread, INFINITE);
     CloseHandle(g_pipe_thread);
     g_pipe_thread = NULL;
   }
   if (g_stop_event != NULL) {
     CloseHandle(g_stop_event);
     g_stop_event = NULL;
+  }
+  if (g_pause_event != NULL) {
+    CloseHandle(g_pause_event); g_pause_event = NULL;
   }
   if (g_exec_request.done_event != NULL) {
     CloseHandle(g_exec_request.done_event);
