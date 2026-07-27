@@ -1344,20 +1344,6 @@ static void wait_for_client_close(HANDLE pipe, OVERLAPPED *ov) {
       pipe, ov, &read, PIPE_CLIENT_DRAIN_TIMEOUT_MS);
 }
 
-static void wait_for_client_close(HANDLE pipe, OVERLAPPED *ov) {
-  char ignored;
-  DWORD read = 0;
-  DWORD error;
-  ResetEvent(ov->hEvent);
-  if (ReadFile(pipe, &ignored, 1, &read, ov)) return;
-  error = GetLastError();
-  if (error == ERROR_BROKEN_PIPE || error == ERROR_NO_DATA ||
-      error == ERROR_PIPE_NOT_CONNECTED) return;
-  if (error != ERROR_IO_PENDING) return;
-  wait_for_pipe_io_timeout(
-      pipe, ov, &read, PIPE_CLIENT_DRAIN_TIMEOUT_MS);
-}
-
 static DWORD WINAPI pipe_thread_main(LPVOID param) {
   SECURITY_ATTRIBUTES sa; PSECURITY_DESCRIPTOR sd = NULL;
   (void)param; ZeroMemory(&sa, sizeof(sa)); sa.nLength = sizeof(sa);
