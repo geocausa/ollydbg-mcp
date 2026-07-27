@@ -1,14 +1,7 @@
-"""Manual smoke test against a running OllyDbg plugin."""
+"""Backward-compatible entry point for the structured runtime smoke test."""
 
-from ollydbg_mcp import OllyBridgeClient
-
-
-def main() -> None:
-    client = OllyBridgeClient()
-    print("status:", client.status())
-    print("capabilities:", client.get_capabilities())
-    print("snapshot:", client.snapshot())
+from ollydbg_mcp.smoke import main
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
