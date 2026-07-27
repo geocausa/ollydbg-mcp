@@ -35,6 +35,27 @@ jobs:
       - name: Run bounded JSON parser harness
         run: ./native_json_harness
 
+  native-dll:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          show-progress: false
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x86
+      - name: Compile, link and inspect the 32-bit DLL
+        shell: powershell
+        run: |
+          .\plugin_stub\build_plugin.ps1 `
+            -SdkDir .\tests\ollydbg_sdk_stub `
+            -OutputDir .\build\native-ci `
+            -AllowTestSdk
+      - name: Remove the test-only DLL
+        if: always()
+        shell: powershell
+        run: Remove-Item .\build\native-ci -Recurse -Force -ErrorAction SilentlyContinue
+
   test:
     runs-on: windows-latest
     strategy:
