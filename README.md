@@ -45,6 +45,7 @@ request to the native bridge. Addresses are represented canonically as unsigned
 - serialized Python requests with bounded response waits
 - owner-restricted, local-only named-pipe access
 - interruptible overlapped pipe I/O for clean plugin shutdown
+- bounded response-drain handshake before the server disconnects
 - reproducible 32-bit MSVC build and export validation
 
 ## Safety defaults
@@ -276,19 +277,22 @@ cc -std=c89 -pedantic -Wall -Wextra -Werror tests/native_json_harness.c -o nativ
 ./native_json_harness
 ```
 
-The unit tests use a fake transport and do not require OllyDbg. They also assert
-that the native source retains the local-only pipe, interruptible shutdown,
-pause sequencing, UI-thread dispatch, bounded parser, bounded response,
-bounded pagination and native-build protections. A manual smoke test remains
-available when a genuine-SDK plugin is loaded:
+Most unit tests use a fake transport and do not require OllyDbg. A dedicated
+Windows suite also exercises the Python client against real local named pipes,
+including fragmented replies, malformed replies, size limits, disconnects and
+timeouts. Source assertions retain the local-only pipe, interruptible shutdown,
+response-drain handshake, pause sequencing, UI-thread dispatch, bounded parser,
+bounded response, bounded pagination and native-build protections. A manual
+smoke test remains available when a genuine-SDK plugin is loaded:
 
 ```powershell
 python .\test_olly_bridge.py
 ```
 
 GitHub Actions runs linting and unit tests on Windows with Python 3.10 and 3.12,
-compiles the native parser harness with strict C89 warnings on Ubuntu, and
-compiles, links and inspects the complete 32-bit DLL on Windows.
+exercises the transport through real Windows named pipes, compiles the native
+parser harness with strict C89 warnings on Ubuntu, and compiles, links and
+inspects the complete 32-bit DLL on Windows.
 
 ## Current native limitations
 
