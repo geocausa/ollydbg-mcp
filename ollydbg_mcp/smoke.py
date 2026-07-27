@@ -22,6 +22,8 @@ REQUIRED_NATIVE_CAPABILITIES = (
     "paged_tables",
     "client_drain_wait",
     "mutation_gate",
+    "strict_native_values",
+    "hardware_breakpoint_validation",
 )
 
 

@@ -9,6 +9,7 @@
 
 #include "Plugin.h"
 #include "bridge_json.h"
+#include "bridge_values.h"
 
 #if defined(_MSC_VER)
 #pragma comment(lib, "Advapi32.lib")
@@ -24,7 +25,7 @@
 #define OLLYBRIDGE_WM_EXEC (WM_APP + 0x110)
 #define OLLYBRIDGE_WM_REQUEST (WM_APP + 0x111)
 #define BRIDGE_PROTOCOL_VERSION 2
-#define BRIDGE_PLUGIN_VERSION "2.4"
+#define BRIDGE_PLUGIN_VERSION "2.5"
 #ifndef PIPE_REJECT_REMOTE_CLIENTS
 #define PIPE_REJECT_REMOTE_CLIENTS 0x00000008
 #endif
@@ -324,47 +325,11 @@ static void json_escape_append(char *out, size_t out_size, size_t *used, const c
 }
 
 static int parse_hex_value(const char *text, unsigned long *value) {
-  char *end_ptr = NULL;
-  unsigned long parsed;
-  if (text == NULL) {
-    return 0;
-  }
-  while (*text == ' ' || *text == '\t' || *text == '"' || *text == ':') {
-    text++;
-  }
-  if (*text == '0' && (text[1] == 'x' || text[1] == 'X')) {
-    text += 2;
-  }
-  parsed = strtoul(text, &end_ptr, 16);
-  if (end_ptr == text) {
-    return 0;
-  }
-  *value = parsed;
-  return 1;
+  return bridge_parse_u32_hex(text, value);
 }
 
 static int parse_hex_bytes(const char *text, unsigned char *out, int max_bytes) {
-  int count = 0;
-  int high_nibble = -1;
-  while (*text != '\0' && count < max_bytes) {
-    int value = -1;
-    char ch = *text++;
-    if (ch >= '0' && ch <= '9') value = ch - '0';
-    else if (ch >= 'a' && ch <= 'f') value = ch - 'a' + 10;
-    else if (ch >= 'A' && ch <= 'F') value = ch - 'A' + 10;
-    else continue;
-    if (high_nibble < 0) {
-      high_nibble = value;
-    }
-    else {
-      out[count++] = (unsigned char)((high_nibble << 4) | value);
-      high_nibble = -1;
-    }
-  }
-  if (high_nibble >= 0) {
-    return -1;
-  }
-  return count;
+  return bridge_parse_hex_bytes(text, out, max_bytes);
 }
 
 static int extract_string_field(const char *json, const char *field, char *out, size_t out_size) {
@@ -475,7 +440,7 @@ static void handle_status(char *out, size_t out_size) {
   LONG mutations_enabled =
       InterlockedCompareExchange(&g_mutations_enabled, 0, 0);
   snprintf(out, out_size,
-      "{\"ok\":true,\"protocol_version\":%d,\"plugin_version\":\"%s\",\"pipe\":\"\\\\\\\\.\\\\pipe\\\\OllyBridge110\",\"debug_status\":%d,\"last_pause_reason\":%ld,\"last_pause_reasonex\":%ld,\"last_pause_eip\":\"0x%08lX\",\"pause_sequence\":%ld,\"mutations_enabled\":%s,\"capabilities\":{\"native_wait_for_pause\":true,\"owner_only_pipe\":true,\"overlapped_pipe\":true,\"ui_thread_dispatch\":true,\"bounded_json_parser\":true,\"paged_tables\":true,\"client_drain_wait\":true,\"mutation_gate\":true,\"remote_clients\":false}}\n",
+      "{\"ok\":true,\"protocol_version\":%d,\"plugin_version\":\"%s\",\"pipe\":\"\\\\\\\\.\\\\pipe\\\\OllyBridge110\",\"debug_status\":%d,\"last_pause_reason\":%ld,\"last_pause_reasonex\":%ld,\"last_pause_eip\":\"0x%08lX\",\"pause_sequence\":%ld,\"mutations_enabled\":%s,\"capabilities\":{\"native_wait_for_pause\":true,\"owner_only_pipe\":true,\"overlapped_pipe\":true,\"ui_thread_dispatch\":true,\"bounded_json_parser\":true,\"paged_tables\":true,\"client_drain_wait\":true,\"mutation_gate\":true,\"strict_native_values\":true,\"hardware_breakpoint_validation\":true,\"remote_clients\":false}}\n",
       BRIDGE_PROTOCOL_VERSION, BRIDGE_PLUGIN_VERSION, (int)g_getstatus(),
       g_last_pause_reason, g_last_pause_reasonex, (ulong)g_last_pause_eip,
       InterlockedCompareExchange(&g_pause_sequence, 0, 0),
@@ -825,37 +790,49 @@ static void handle_set_hardware_breakpoint(const char *json, char *out, size_t o
     respond_error(out, out_size, "Hardware breakpoint type must be execute, access, or write");
     return;
   }
+  if (type == HB_CODE && size != 1) {
+    respond_error(out, out_size, "Execute hardware breakpoints must have size 1");
+    return;
+  }
+  if (type != HB_CODE && size > 1 && (address % (unsigned long)size) != 0) {
+    respond_error(out, out_size, "Data hardware breakpoint address is not aligned to its size");
+    return;
+  }
+  for (slot = 0; slot < 4; slot++) {
+    if (!g_hardware_breakpoints_valid[slot]) break;
+  }
+  if (slot >= 4) {
+    respond_error(out, out_size, "No free tracked hardware breakpoint slot");
+    return;
+  }
   result = g_sethardwarebreakpoint(address, size, type);
   if (result != 0) {
     respond_error(out, out_size, "Sethardwarebreakpoint failed");
     return;
   }
-  for (slot = 0; slot < 4; slot++) {
-    if (!g_hardware_breakpoints_valid[slot]) {
-      g_hardware_breakpoints[slot].addr = address;
-      g_hardware_breakpoints[slot].size = size;
-      g_hardware_breakpoints[slot].type = type;
-      g_hardware_breakpoints_valid[slot] = 1;
-      break;
-    }
-  }
+  g_hardware_breakpoints[slot].addr = address;
+  g_hardware_breakpoints[slot].size = size;
+  g_hardware_breakpoints[slot].type = type;
+  g_hardware_breakpoints_valid[slot] = 1;
   snprintf(out, out_size, "{\"ok\":true,\"index\":%d,\"address\":\"0x%08lX\",\"size\":%d,\"type\":\"%s\"}\n", slot, address, size, type_text);
 }
 
 static void handle_clear_hardware_breakpoint(const char *json, char *out, size_t out_size) {
   int index = -1;
-  if (!extract_int_field(json, "index", &index) || index < 0) {
-    respond_error(out, out_size, "Missing or invalid hardware breakpoint index");
+  if (!extract_int_field(json, "index", &index) || index < 0 || index >= 4) {
+    respond_error(out, out_size, "Hardware breakpoint index must be between 0 and 3");
+    return;
+  }
+  if (!g_hardware_breakpoints_valid[index]) {
+    respond_error(out, out_size, "Hardware breakpoint slot is not tracked by this plugin");
     return;
   }
   if (g_deletehardwarebreakpoint(index) != 0) {
     respond_error(out, out_size, "Deletehardwarebreakpoint failed");
     return;
   }
-  if (index >= 0 && index < 4) {
-    g_hardware_breakpoints_valid[index] = 0;
-    memset(&g_hardware_breakpoints[index], 0, sizeof(g_hardware_breakpoints[index]));
-  }
+  g_hardware_breakpoints_valid[index] = 0;
+  memset(&g_hardware_breakpoints[index], 0, sizeof(g_hardware_breakpoints[index]));
   snprintf(out, out_size, "{\"ok\":true,\"index\":%d}\n", index);
 }
 

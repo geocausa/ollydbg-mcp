@@ -34,6 +34,10 @@ jobs:
         run: cc -std=c89 -pedantic -Wall -Wextra -Werror tests/native_json_harness.c -o native_json_harness
       - name: Run bounded JSON parser harness
         run: ./native_json_harness
+      - name: Compile strict native value parser harness
+        run: cc -std=c89 -pedantic -Wall -Wextra -Werror tests/native_values_harness.c -o native_values_harness
+      - name: Run strict native value parser harness
+        run: ./native_values_harness
 
   native-dll:
     runs-on: windows-latest

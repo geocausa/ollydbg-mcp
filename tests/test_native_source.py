@@ -3,6 +3,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE = (ROOT / "plugin_stub" / "ollydbg110_bridge.c").read_text(encoding="utf-8")
 PARSER = (ROOT / "plugin_stub" / "bridge_json.h").read_text(encoding="utf-8")
+VALUES = (ROOT / "plugin_stub" / "bridge_values.h").read_text(encoding="utf-8")
 EXPORTS = (ROOT / "plugin_stub" / "OllyBridge110.def").read_text(encoding="utf-8")
 
 
@@ -74,6 +75,36 @@ def test_bounded_json_parser_is_integrated() -> None:
     assert "bridge_json_extract_bool(" in PARSER
 
 
+def test_native_values_are_strict_and_portable() -> None:
+    assert '#include "bridge_values.h"' in SOURCE
+    assert "return bridge_parse_u32_hex(text, value);" in SOURCE
+    assert "return bridge_parse_hex_bytes(text, out, max_bytes);" in SOURCE
+    assert "strtoul(" not in SOURCE
+    assert "bridge_parse_u32_hex(" in VALUES
+    assert "bridge_parse_hex_bytes(" in VALUES
+    assert "digits >= 8" in VALUES
+    assert "*text != '\\0'" in VALUES
+    assert "length > (size_t)max_bytes * 2" in VALUES
+
+
+def test_hardware_breakpoints_are_validated_before_api_calls() -> None:
+    assert "Execute hardware breakpoints must have size 1" in SOURCE
+    assert "Data hardware breakpoint address is not aligned to its size" in SOURCE
+    assert "No free tracked hardware breakpoint slot" in SOURCE
+    assert "Hardware breakpoint index must be between 0 and 3" in SOURCE
+    assert "Hardware breakpoint slot is not tracked by this plugin" in SOURCE
+    assert SOURCE.index("if (slot >= 4)") < SOURCE.index(
+        "result = g_sethardwarebreakpoint(address, size, type);"
+    )
+    clear_start = SOURCE.index("static void handle_clear_hardware_breakpoint(")
+    clear_end = SOURCE.index("static void handle_list_hardware_breakpoints(")
+    clear_source = SOURCE[clear_start:clear_end]
+    assert clear_source.index("index < 0 || index >= 4") < clear_source.index(
+        "g_deletehardwarebreakpoint(index)"
+    )
+    assert "index >= 0 && index < 4" not in clear_source
+
+
 def test_native_tables_are_paginated_with_bounded_page_sizes() -> None:
     assert "#define BREAKPOINT_PAGE_LIMIT 32" in SOURCE
     assert "#define MODULE_PAGE_LIMIT 8" in SOURCE
@@ -92,7 +123,7 @@ def test_native_tables_are_paginated_with_bounded_page_sizes() -> None:
 
 def test_native_protocol_identifies_capabilities() -> None:
     assert "#define BRIDGE_PROTOCOL_VERSION 2" in SOURCE
-    assert "#define BRIDGE_PLUGIN_VERSION \"2.4\"" in SOURCE
+    assert "#define BRIDGE_PLUGIN_VERSION \"2.5\"" in SOURCE
     for capability in (
         "native_wait_for_pause",
         "owner_only_pipe",
@@ -102,6 +133,8 @@ def test_native_protocol_identifies_capabilities() -> None:
         "paged_tables",
         "client_drain_wait",
         "mutation_gate",
+        "strict_native_values",
+        "hardware_breakpoint_validation",
         "remote_clients",
     ):
         assert capability in SOURCE
