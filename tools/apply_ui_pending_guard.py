@@ -40,12 +40,12 @@ replace_once(
     "execution timeout ownership",
 )
 replace_once(
-    '''  ResetEvent(g_bridge_request.done_event);
+    r'''  ResetEvent(g_bridge_request.done_event);
   memcpy(g_bridge_request.request, json, request_length + 1);
   g_bridge_request.response[0] = '\0';
   InterlockedExchange(&g_bridge_request.pending, 1);
 ''',
-    '''  if (InterlockedCompareExchange(&g_bridge_request.pending, 1, 0) != 0)
+    r'''  if (InterlockedCompareExchange(&g_bridge_request.pending, 1, 0) != 0)
     return 0;
   ResetEvent(g_bridge_request.done_event);
   memcpy(g_bridge_request.request, json, request_length + 1);
