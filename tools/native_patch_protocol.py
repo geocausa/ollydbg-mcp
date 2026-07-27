@@ -226,8 +226,18 @@ extc __declspec(dllexport) void cdecl _ODBG_Plugindestroy''',
 extc __declspec(dllexport) void cdecl _ODBG_Plugindestroy''', 'pausedex')
 s = rep(s, '    WaitForSingleObject(g_pipe_thread, 1500);\n',
             '    WaitForSingleObject(g_pipe_thread, INFINITE);\n', 'shutdown wait')
-s = rep(s, '  if (g_exec_request.done_event != NULL) {\n',
-'''  if (g_pause_event != NULL) {
+s = rep(s,
+'''  if (g_stop_event != NULL) {
+    CloseHandle(g_stop_event);
+    g_stop_event = NULL;
+  }
+  if (g_exec_request.done_event != NULL) {
+''',
+'''  if (g_stop_event != NULL) {
+    CloseHandle(g_stop_event);
+    g_stop_event = NULL;
+  }
+  if (g_pause_event != NULL) {
     CloseHandle(g_pause_event); g_pause_event = NULL;
   }
   if (g_exec_request.done_event != NULL) {
