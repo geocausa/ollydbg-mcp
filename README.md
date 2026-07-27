@@ -37,6 +37,8 @@ request to the native bridge. Addresses are represented canonically as unsigned
 - debugger operations marshalled through OllyDbg's UI thread
 - event-driven native pause sequencing with an automatic legacy fallback
 - strict bounded native JSON parsing with UTF-8 and Unicode-escape validation
+- strict native 32-bit address and byte-payload validation
+- hardware-breakpoint slot, size, index and alignment validation
 - address lookup, labels and comments
 - guarded debuggee-memory writes
 - combined debugger snapshots
@@ -127,6 +129,7 @@ The native source lives at:
 ```text
 plugin_stub/ollydbg110_bridge.c
 plugin_stub/bridge_json.h
+plugin_stub/bridge_values.h
 ```
 
 Open a **32-bit Visual Studio Native Tools** PowerShell or command prompt, then
@@ -332,7 +335,11 @@ The Python boundary currently enforces:
 
 The native parser independently validates the complete JSON document, exact
 field names, field types, integer ranges, UTF-8, escaped Unicode, duplicate
-requested fields, nesting depth and destination-buffer bounds.
+requested fields, nesting depth and destination-buffer bounds. Native value
+parsers also reject addresses outside eight hexadecimal digits, signs, trailing
+junk and malformed or oversized byte payloads. Hardware-breakpoint size,
+alignment, tracked-slot availability and clear indexes are checked again inside
+the DLL before an OllyDbg API is called.
 
 ## Testing
 
@@ -349,6 +356,8 @@ The standalone parser harness can also be compiled without the OllyDbg SDK:
 ```text
 cc -std=c89 -pedantic -Wall -Wextra -Werror tests/native_json_harness.c -o native_json_harness
 ./native_json_harness
+cc -std=c89 -pedantic -Wall -Wextra -Werror tests/native_values_harness.c -o native_values_harness
+./native_values_harness
 ```
 
 Most unit tests use a fake transport and do not require OllyDbg. A dedicated
@@ -360,12 +369,12 @@ deleted and is never uploaded.
 
 Source assertions retain the local-only pipe, interruptible shutdown,
 response-drain handshake, pause sequencing, UI-thread dispatch, bounded parser,
-bounded response, bounded pagination, native-build and runtime-harness
-protections.
+strict native values, hardware-breakpoint validation, bounded response, bounded
+pagination, native-build and runtime-harness protections.
 
 GitHub Actions runs linting and unit tests on Windows with Python 3.10 and 3.12,
-exercises the transport through real Windows named pipes, compiles the native
-parser harness with strict C89 warnings on Ubuntu, compiles and inspects the
+exercises the transport through real Windows named pipes, compiles both native
+parser harnesses with strict C89 warnings on Ubuntu, compiles and inspects the
 complete 32-bit DLL, and compiles and inspects the controlled x86 target.
 
 ## Current native limitations

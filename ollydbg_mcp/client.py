@@ -142,6 +142,14 @@ class OllyBridgeClient:
                     status.get("capabilities", {}).get("mutation_gate")
                 ),
                 "mutations_enabled": status.get("mutations_enabled") is True,
+                "strict_native_values": bool(
+                    status.get("capabilities", {}).get("strict_native_values")
+                ),
+                "hardware_breakpoint_validation": bool(
+                    status.get("capabilities", {}).get(
+                        "hardware_breakpoint_validation"
+                    )
+                ),
                 "atomic_snapshot": False,
             },
         }
