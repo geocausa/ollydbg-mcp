@@ -9,7 +9,8 @@ param(
     [string]$PluginDllPath,
     [switch]$RestartOlly,
     [switch]$SkipIniUpdate,
-    [switch]$SkipServer
+    [switch]$SkipServer,
+    [switch]$EnableNativeMutations
 )
 
 $ErrorActionPreference = 'Stop'
@@ -89,7 +90,27 @@ $ollyArguments = @()
 if ($TargetExe) {
     $ollyArguments += ('"{0}"' -f $targetPath)
 }
-Start-Process -FilePath $ollyExe -ArgumentList $ollyArguments
+
+$mutationVariable = 'OLLYBRIDGE_ALLOW_MUTATIONS'
+$previousMutationSetting = [System.Environment]::GetEnvironmentVariable(
+    $mutationVariable,
+    'Process'
+)
+try {
+    [System.Environment]::SetEnvironmentVariable(
+        $mutationVariable,
+        $(if ($EnableNativeMutations) { '1' } else { '0' }),
+        'Process'
+    )
+    Start-Process -FilePath $ollyExe -ArgumentList $ollyArguments
+}
+finally {
+    [System.Environment]::SetEnvironmentVariable(
+        $mutationVariable,
+        $previousMutationSetting,
+        'Process'
+    )
+}
 
 if (!$SkipServer) {
     $python = Get-Command python -ErrorAction Stop
@@ -100,6 +121,12 @@ if (!$SkipServer) {
 }
 
 Write-Host "OllyDbg launched with plugin from $pluginPath"
+Write-Host $(if ($EnableNativeMutations) {
+    'Native debugger mutations are enabled for this OllyDbg process.'
+}
+else {
+    'Native debugger mutations are disabled (read-only gate).'
+})
 if ($SkipServer) {
     Write-Host 'MCP server launch skipped.'
 }
