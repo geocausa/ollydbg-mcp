@@ -17,6 +17,7 @@
 #define PIPE_BUFFER_SIZE 8192
 #define OLLYBRIDGE_WINDOW_CLASS "OllyBridge110Window"
 #define OLLYBRIDGE_WM_EXEC (WM_APP + 0x110)
+#define OLLYBRIDGE_WM_REQUEST (WM_APP + 0x111)
 #define BRIDGE_PROTOCOL_VERSION 2
 #define BRIDGE_PLUGIN_VERSION "2.0"
 #ifndef PIPE_REJECT_REMOTE_CLIENTS
@@ -49,6 +50,7 @@ static HANDLE g_pipe_thread = NULL;
 static HANDLE g_pause_event = NULL;
 static volatile LONG g_running = 0;
 static HWND g_command_window = NULL;
+static DWORD g_ui_thread_id = 0;
 static volatile LONG g_last_pause_reason = 0;
 static volatile LONG g_last_pause_reasonex = 0;
 static volatile ULONG_PTR g_last_pause_eip = 0;
@@ -76,6 +78,17 @@ typedef struct t_exec_request {
 } t_exec_request;
 
 static t_exec_request g_exec_request = {0};
+
+typedef struct t_bridge_request {
+  volatile LONG pending;
+  char request[PIPE_BUFFER_SIZE];
+  char response[PIPE_BUFFER_SIZE];
+  HANDLE done_event;
+} t_bridge_request;
+
+static t_bridge_request g_bridge_request = {0};
+
+static void dispatch_request(const char *json, char *out, size_t out_size);
 
 static fn_addtolist_t g_addtolist = NULL;
 static fn_setcpu_t g_setcpu = NULL;
@@ -151,57 +164,111 @@ static void dispatch_main_key(int vkcode) {
   g_sendshortcut(PM_MAIN, 0, WM_KEYDOWN, 0, 0, vkcode);
 }
 
+static void execute_command_now(int command, ulong address, int give_chance) {
+  g_exec_request.result = 0;
+  g_exec_request.thread_id = g_getcputhreadid();
+  switch (command) {
+    case EXEC_RUN:
+      g_exec_request.result = g_go(0, address, STEP_RUN, give_chance, 1);
+      break;
+    case EXEC_STEP_IN:
+      g_exec_request.result = g_go(0, 0, STEP_IN, 0, 1);
+      break;
+    case EXEC_STEP_OVER:
+      g_exec_request.result = g_go(0, 0, STEP_OVER, 0, 1);
+      break;
+    case EXEC_CONTINUE:
+      g_exec_request.result = g_go(0, 0, STEP_RUN, 0, 1);
+      break;
+    default:
+      g_exec_request.result = -1;
+      break;
+  }
+  g_exec_request.debug_status = (int)g_getstatus();
+}
+
 static LRESULT CALLBACK ollybridge_window_proc(HWND hwnd, UINT message, WPARAM wparam, LPARAM lparam) {
   (void)hwnd;
   (void)wparam;
   (void)lparam;
+  if (message == OLLYBRIDGE_WM_REQUEST) {
+    ZeroMemory(g_bridge_request.response, sizeof(g_bridge_request.response));
+    dispatch_request(
+        g_bridge_request.request,
+        g_bridge_request.response,
+        sizeof(g_bridge_request.response));
+    InterlockedExchange(&g_bridge_request.pending, 0);
+    if (g_bridge_request.done_event != NULL) SetEvent(g_bridge_request.done_event);
+    return 0;
+  }
   if (message == OLLYBRIDGE_WM_EXEC) {
-    g_exec_request.result = 0;
-    g_exec_request.thread_id = g_getcputhreadid();
-    switch (g_exec_request.command) {
-      case EXEC_RUN:
-        g_exec_request.result = g_go(0, g_exec_request.address, STEP_RUN, g_exec_request.give_chance, 1);
-        break;
-      case EXEC_STEP_IN:
-        g_exec_request.result = g_go(0, 0, STEP_IN, 0, 1);
-        break;
-      case EXEC_STEP_OVER:
-        g_exec_request.result = g_go(0, 0, STEP_OVER, 0, 1);
-        break;
-      case EXEC_CONTINUE:
-        g_exec_request.result = g_go(0, 0, STEP_RUN, 0, 1);
-        break;
-      default:
-        g_exec_request.result = -1;
-        break;
-    }
-    g_exec_request.debug_status = (int)g_getstatus();
+    execute_command_now(
+        g_exec_request.command,
+        g_exec_request.address,
+        g_exec_request.give_chance);
     InterlockedExchange(&g_exec_request.pending, 0);
-    if (g_exec_request.done_event != NULL) {
-      SetEvent(g_exec_request.done_event);
-    }
+    if (g_exec_request.done_event != NULL) SetEvent(g_exec_request.done_event);
     return 0;
   }
   return DefWindowProcA(hwnd, message, wparam, lparam);
 }
 
+static int wait_for_ui_completion(HANDLE done_event, DWORD timeout_ms) {
+  HANDLE waits[2];
+  if (done_event == NULL || g_stop_event == NULL) return WAIT_FAILED;
+  waits[0] = done_event;
+  waits[1] = g_stop_event;
+  return (int)WaitForMultipleObjects(2, waits, FALSE, timeout_ms);
+}
+
 static int execute_on_ui_thread(int command, ulong address, int give_chance) {
-  if (g_command_window == NULL || g_exec_request.done_event == NULL) {
-    return WAIT_FAILED;
+  int wait_result;
+  if (g_command_window == NULL || g_exec_request.done_event == NULL) return WAIT_FAILED;
+  if (GetCurrentThreadId() == g_ui_thread_id) {
+    execute_command_now(command, address, give_chance);
+    return WAIT_OBJECT_0;
   }
   ResetEvent(g_exec_request.done_event);
   g_exec_request.command = command;
   g_exec_request.address = address;
   g_exec_request.give_chance = give_chance;
-  g_exec_request.result = 0;
-  g_exec_request.debug_status = (int)g_getstatus();
-  g_exec_request.thread_id = g_getcputhreadid();
   InterlockedExchange(&g_exec_request.pending, 1);
   if (!PostMessageA(g_command_window, OLLYBRIDGE_WM_EXEC, 0, 0)) {
     InterlockedExchange(&g_exec_request.pending, 0);
     return WAIT_FAILED;
   }
-  return (int)WaitForSingleObject(g_exec_request.done_event, 2000);
+  wait_result = wait_for_ui_completion(g_exec_request.done_event, 5000);
+  if (wait_result != WAIT_OBJECT_0) InterlockedExchange(&g_exec_request.pending, 0);
+  return wait_result;
+}
+
+static int execute_request_on_ui_thread(const char *json, char *out, size_t out_size) {
+  int wait_result;
+  size_t request_length;
+  if (json == NULL || out == NULL || out_size == 0 || g_command_window == NULL ||
+      g_bridge_request.done_event == NULL) return 0;
+  if (GetCurrentThreadId() == g_ui_thread_id) {
+    dispatch_request(json, out, out_size);
+    return 1;
+  }
+  request_length = strlen(json);
+  if (request_length >= sizeof(g_bridge_request.request)) return 0;
+  ResetEvent(g_bridge_request.done_event);
+  memcpy(g_bridge_request.request, json, request_length + 1);
+  g_bridge_request.response[0] = '\0';
+  InterlockedExchange(&g_bridge_request.pending, 1);
+  if (!PostMessageA(g_command_window, OLLYBRIDGE_WM_REQUEST, 0, 0)) {
+    InterlockedExchange(&g_bridge_request.pending, 0);
+    return 0;
+  }
+  wait_result = wait_for_ui_completion(g_bridge_request.done_event, 5000);
+  if (wait_result != WAIT_OBJECT_0) {
+    InterlockedExchange(&g_bridge_request.pending, 0);
+    return 0;
+  }
+  strncpy(out, g_bridge_request.response, out_size - 1);
+  out[out_size - 1] = '\0';
+  return 1;
 }
 
 static int append_format(char *out, size_t out_size, size_t *used, const char *format, ...) {
@@ -404,13 +471,13 @@ static void respond_stateful_error(char *out, size_t out_size, const char *messa
 
 static void handle_status(char *out, size_t out_size) {
   snprintf(out, out_size,
-      "{\"ok\":true,\"protocol_version\":%d,\"plugin_version\":\"%s\",\"pipe\":\"\\\\\\\\.\\\\pipe\\\\OllyBridge110\",\"debug_status\":%d,\"last_pause_reason\":%ld,\"last_pause_reasonex\":%ld,\"last_pause_eip\":\"0x%08lX\",\"pause_sequence\":%ld,\"capabilities\":{\"native_wait_for_pause\":true,\"owner_only_pipe\":true,\"overlapped_pipe\":true,\"remote_clients\":false}}\n",
+      "{\"ok\":true,\"protocol_version\":%d,\"plugin_version\":\"%s\",\"pipe\":\"\\\\\\\\.\\\\pipe\\\\OllyBridge110\",\"debug_status\":%d,\"last_pause_reason\":%ld,\"last_pause_reasonex\":%ld,\"last_pause_eip\":\"0x%08lX\",\"pause_sequence\":%ld,\"capabilities\":{\"native_wait_for_pause\":true,\"owner_only_pipe\":true,\"overlapped_pipe\":true,\"ui_thread_dispatch\":true,\"remote_clients\":false}}\n",
       BRIDGE_PROTOCOL_VERSION, BRIDGE_PLUGIN_VERSION, (int)g_getstatus(),
       g_last_pause_reason, g_last_pause_reasonex, (ulong)g_last_pause_eip,
       InterlockedCompareExchange(&g_pause_sequence, 0, 0));
 }
 
-static void handle_wait_for_pause(const char *json, char *out, size_t out_size) {
+static void handle_wait_for_pause_worker(const char *json, char *out, size_t out_size) {
   int after_sequence = (int)InterlockedCompareExchange(&g_pause_sequence, 0, 0);
   int timeout_ms = 5000;
   DWORD started = GetTickCount();
@@ -424,7 +491,11 @@ static void handle_wait_for_pause(const char *json, char *out, size_t out_size) 
   for (;;) {
     LONG seq = InterlockedCompareExchange(&g_pause_sequence, 0, 0);
     DWORD elapsed, wr;
-    if (seq > after_sequence) { handle_status(out, out_size); return; }
+    if (seq > after_sequence) {
+      if (!execute_request_on_ui_thread("{\"command\":\"status\"}", out, out_size))
+        respond_error(out, out_size, "Unable to collect paused debugger status");
+      return;
+    }
     elapsed = GetTickCount() - started;
     if (elapsed >= (DWORD)timeout_ms) {
       snprintf(out, out_size, "{\"ok\":false,\"timed_out\":true,\"error\":\"Timed out waiting for OllyDbg to pause\",\"pause_sequence\":%ld}\n", seq); return;
@@ -1069,7 +1140,7 @@ static void dispatch_request(const char *json, char *out, size_t out_size) {
     handle_status(out, out_size);
   }
   else if (strcmp(command, "wait_for_pause") == 0) {
-    handle_wait_for_pause(json, out, out_size);
+    respond_error(out, out_size, "wait_for_pause must run on the pipe worker");
   }
   else if (strcmp(command, "goto") == 0) {
     handle_goto(json, out, out_size);
@@ -1212,7 +1283,15 @@ static DWORD WINAPI pipe_thread_main(LPVOID param) {
     if (connect_pipe_overlapped(pipe, &ov)) {
       ZeroMemory(request, sizeof(request)); ZeroMemory(response, sizeof(response));
       if (read_pipe_overlapped(pipe, request, sizeof(request) - 1, &read, &ov) && read > 0) {
-        request[read] = '\0'; dispatch_request(request, response, sizeof(response));
+        char command[64];
+        request[read] = '\0';
+        if (extract_string_field(request, "command", command, sizeof(command)) &&
+            strcmp(command, "wait_for_pause") == 0) {
+          handle_wait_for_pause_worker(request, response, sizeof(response));
+        }
+        else if (!execute_request_on_ui_thread(request, response, sizeof(response))) {
+          respond_error(response, sizeof(response), "UI-thread request dispatch failed");
+        }
       }
       else if (WaitForSingleObject(g_stop_event, 0) != WAIT_OBJECT_0) {
         respond_error(response, sizeof(response), "Failed to read from pipe");
@@ -1242,6 +1321,7 @@ extc __declspec(dllexport) int cdecl _ODBG_Plugininit(int ollydbgversion, HWND h
   (void)hw;
   (void)features;
   WNDCLASSA window_class;
+  g_ui_thread_id = GetCurrentThreadId();
   if (ollydbgversion < PLUGIN_VERSION) {
     return -1;
   }
@@ -1273,8 +1353,14 @@ extc __declspec(dllexport) int cdecl _ODBG_Plugininit(int ollydbgversion, HWND h
   if (g_exec_request.done_event == NULL) {
     DestroyWindow(g_command_window); g_command_window = NULL; return -1;
   }
+  g_bridge_request.done_event = CreateEventA(NULL, TRUE, FALSE, NULL);
+  if (g_bridge_request.done_event == NULL) {
+    CloseHandle(g_exec_request.done_event); g_exec_request.done_event = NULL;
+    DestroyWindow(g_command_window); g_command_window = NULL; return -1;
+  }
   g_pause_event = CreateEventA(NULL, FALSE, FALSE, NULL);
   if (g_pause_event == NULL) {
+    CloseHandle(g_bridge_request.done_event); g_bridge_request.done_event = NULL;
     CloseHandle(g_exec_request.done_event); g_exec_request.done_event = NULL;
     DestroyWindow(g_command_window); g_command_window = NULL; return -1;
   }
@@ -1283,6 +1369,7 @@ extc __declspec(dllexport) int cdecl _ODBG_Plugininit(int ollydbgversion, HWND h
   g_stop_event = CreateEventA(NULL, TRUE, FALSE, NULL);
   if (g_stop_event == NULL) {
     CloseHandle(g_pause_event); g_pause_event = NULL;
+    CloseHandle(g_bridge_request.done_event); g_bridge_request.done_event = NULL;
     CloseHandle(g_exec_request.done_event);
     g_exec_request.done_event = NULL;
     DestroyWindow(g_command_window);
@@ -1294,6 +1381,7 @@ extc __declspec(dllexport) int cdecl _ODBG_Plugininit(int ollydbgversion, HWND h
     CloseHandle(g_stop_event);
     g_stop_event = NULL;
     CloseHandle(g_pause_event); g_pause_event = NULL;
+    CloseHandle(g_bridge_request.done_event); g_bridge_request.done_event = NULL;
     CloseHandle(g_exec_request.done_event);
     g_exec_request.done_event = NULL;
     DestroyWindow(g_command_window);
@@ -1361,6 +1449,10 @@ extc __declspec(dllexport) void cdecl _ODBG_Plugindestroy(void) {
   if (g_pause_event != NULL) {
     CloseHandle(g_pause_event); g_pause_event = NULL;
   }
+  if (g_bridge_request.done_event != NULL) {
+    CloseHandle(g_bridge_request.done_event);
+    g_bridge_request.done_event = NULL;
+  }
   if (g_exec_request.done_event != NULL) {
     CloseHandle(g_exec_request.done_event);
     g_exec_request.done_event = NULL;
@@ -1369,5 +1461,6 @@ extc __declspec(dllexport) void cdecl _ODBG_Plugindestroy(void) {
     DestroyWindow(g_command_window);
     g_command_window = NULL;
   }
+  g_ui_thread_id = 0;
   UnregisterClassA(OLLYBRIDGE_WINDOW_CLASS, g_instance);
 }
