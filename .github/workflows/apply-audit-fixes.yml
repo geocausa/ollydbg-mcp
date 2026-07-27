@@ -42,5 +42,6 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add README.md ollydbg_mcp/client.py ollydbg_mcp/smoke.py plugin_stub/OllyBridge110.def plugin_stub/build_plugin.ps1 plugin_stub/ollydbg110_bridge.c start_olly_bridge.ps1 tests/test_named_pipe_windows.py tests/test_native_source.py tests/test_runtime_harness.py tests/test_smoke.py tests/test_transport.py
           git commit -m "Apply audit correctness fixes"
+          git restore tools/apply_audit_fixes.py
           git pull --rebase origin audit-fixes-v13
           git push origin HEAD:audit-fixes-v13
