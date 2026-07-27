@@ -22,7 +22,7 @@ jobs:
       - uses: astral-sh/ruff-action@v3
         with:
           version: "0.15.22"
-          args: "check --fix --diff ."
+          args: "check ."
 
   test:
     runs-on: windows-latest
