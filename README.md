@@ -47,6 +47,7 @@ request to the native bridge. Addresses are represented canonically as unsigned
 - interruptible overlapped pipe I/O for clean plugin shutdown
 - bounded response-drain handshake before the server disconnects
 - reproducible 32-bit MSVC build and export validation
+- controlled x86 runtime target with a structured smoke-test report
 
 ## Safety defaults
 
@@ -175,7 +176,63 @@ powershell -ExecutionPolicy Bypass -File .\start_olly_bridge.ps1 `
   -RestartOlly
 ```
 
-Pass `-TargetExe` to open a specific executable.
+Pass `-TargetExe` to open a specific executable. `-PluginDllPath` selects a DLL
+outside the repository root, and `-SkipServer` launches only OllyDbg when a
+direct named-pipe client such as the smoke runner is being used.
+
+## Genuine-SDK runtime smoke test
+
+The runtime harness builds the plugin with the genuine SDK, builds a controlled
+32-bit target, launches that target in OllyDbg and writes a structured JSON
+report. From an ordinary PowerShell prompt:
+
+```powershell
+.\integration\run_runtime_smoke.ps1 `
+  -OllyDir 'C:\Tools\OllyDbg' `
+  -PluginDir 'C:\Tools\OllyDbg\Plugins' `
+  -SdkDir 'C:\Path\To\OllyDbg110SDK' `
+  -RestartOlly
+```
+
+The controlled executable is linked at the fixed `0x00400000` image base with
+ASLR disabled. It exports a probe function and counter. The target build records
+their virtual addresses in `olly_smoke_manifest.json`, so the smoke runner can
+validate the loaded module, memory reads, address lookup and disassembly without
+hard-coded guesses.
+
+The default run is read-only. Two independent opt-ins extend it:
+
+```powershell
+# Temporarily set, verify and clear a software breakpoint.
+.\integration\run_runtime_smoke.ps1 ... -AllowMutations
+
+# Run to the exported probe and execute one single step.
+.\integration\run_runtime_smoke.ps1 ... -AllowExecution
+```
+
+The mutation check preserves a breakpoint that already existed at the probe.
+The execution check changes debuggee state and therefore remains separate. The
+launcher still refuses to terminate an existing OllyDbg instance unless
+`-RestartOlly` is supplied. Pass `-SkipIniUpdate` only when the configured plugin
+directory is already correct.
+
+Generated files are placed below `build/runtime-smoke/`. The final report is:
+
+```text
+build/runtime-smoke/olly_smoke_report.json
+```
+
+The runner can also be called directly after the target and genuine-SDK plugin
+have been built and loaded:
+
+```powershell
+ollydbg-smoke `
+  --manifest .\build\runtime-smoke\target\olly_smoke_manifest.json `
+  --timeout 30
+```
+
+`python .\test_olly_bridge.py` remains a compatibility entry point for the same
+structured runner.
 
 ## MCP tools
 
@@ -278,30 +335,29 @@ cc -std=c89 -pedantic -Wall -Wextra -Werror tests/native_json_harness.c -o nativ
 ```
 
 Most unit tests use a fake transport and do not require OllyDbg. A dedicated
-Windows suite also exercises the Python client against real local named pipes,
+Windows suite exercises the Python client against real local named pipes,
 including fragmented replies, malformed replies, size limits, disconnects and
-timeouts. Source assertions retain the local-only pipe, interruptible shutdown,
-response-drain handshake, pause sequencing, UI-thread dispatch, bounded parser,
-bounded response, bounded pagination and native-build protections. A manual
-smoke test remains available when a genuine-SDK plugin is loaded:
+timeouts. The controlled runtime target is compiled as fixed-base x86 in CI and
+its exported-address manifest is validated; the generated executable is then
+deleted and is never uploaded.
 
-```powershell
-python .\test_olly_bridge.py
-```
+Source assertions retain the local-only pipe, interruptible shutdown,
+response-drain handshake, pause sequencing, UI-thread dispatch, bounded parser,
+bounded response, bounded pagination, native-build and runtime-harness
+protections.
 
 GitHub Actions runs linting and unit tests on Windows with Python 3.10 and 3.12,
 exercises the transport through real Windows named pipes, compiles the native
-parser harness with strict C89 warnings on Ubuntu, and compiles, links and
-inspects the complete 32-bit DLL on Windows.
+parser harness with strict C89 warnings on Ubuntu, compiles and inspects the
+complete 32-bit DLL, and compiles and inspects the controlled x86 target.
 
 ## Current native limitations
 
 The native bridge remains intentionally small and compatible with OllyDbg 1.10.
-Remaining work requires a real debugger environment:
-
-- build against the genuine OllyDbg 1.10 SDK and confirm its ABI at runtime
-- load the resulting DLL into a real OllyDbg 1.10 installation
-- run automated integration tests against a controlled 32-bit debug target
+The repository can now build and validate the controlled target automatically,
+but GitHub-hosted CI cannot legally or practically load a genuine OllyDbg 1.10
+installation and proprietary SDK. Runtime ABI confirmation therefore remains a
+local Windows step through `integration/run_runtime_smoke.ps1`.
 
 The current bridge is substantially safer for normal local use, but it should
 still be treated as trusted-user debugger automation rather than a hardened

@@ -6,8 +6,10 @@ param(
     [string]$OllyDir,
     [Parameter(Mandatory = $true)]
     [string]$PluginDir,
+    [string]$PluginDllPath,
     [switch]$RestartOlly,
-    [switch]$SkipIniUpdate
+    [switch]$SkipIniUpdate,
+    [switch]$SkipServer
 )
 
 $ErrorActionPreference = 'Stop'
@@ -17,10 +19,19 @@ $workspacePath = (Resolve-Path -LiteralPath $Workspace).Path
 $ollyPath = (Resolve-Path -LiteralPath $OllyDir).Path
 $ollyExe = Join-Path $ollyPath 'OLLYDBG.EXE'
 $iniPath = Join-Path $ollyPath 'ollydbg.ini'
-$pluginDll = Join-Path $workspacePath 'OllyBridge110.dll'
+$resolvedPluginDll = if ($PluginDllPath) {
+    (Resolve-Path -LiteralPath $PluginDllPath).Path
+}
+else {
+    Join-Path $workspacePath 'OllyBridge110.dll'
+}
 $serverPy = Join-Path $workspacePath 'server.py'
 
-foreach ($requiredPath in @($ollyExe, $iniPath, $pluginDll, $serverPy)) {
+$requiredPaths = @($ollyExe, $iniPath, $resolvedPluginDll)
+if (!$SkipServer) {
+    $requiredPaths += $serverPy
+}
+foreach ($requiredPath in $requiredPaths) {
     if (!(Test-Path -LiteralPath $requiredPath -PathType Leaf)) {
         throw "Required file not found: $requiredPath"
     }
@@ -61,7 +72,7 @@ if (!$SkipIniUpdate) {
     Write-Host "Backed up ollydbg.ini to $backupPath"
 }
 
-Copy-Item -LiteralPath $pluginDll `
+Copy-Item -LiteralPath $resolvedPluginDll `
     -Destination (Join-Path $pluginPath 'OllyBridge110.dll') `
     -Force
 
@@ -80,11 +91,18 @@ if ($TargetExe) {
 }
 Start-Process -FilePath $ollyExe -ArgumentList $ollyArguments
 
-$python = Get-Command python -ErrorAction Stop
-$serverArguments = @(('"{0}"' -f $serverPy), '--transport', 'stdio')
-Start-Process -FilePath $python.Source `
-    -ArgumentList $serverArguments `
-    -WorkingDirectory $workspacePath
+if (!$SkipServer) {
+    $python = Get-Command python -ErrorAction Stop
+    $serverArguments = @(('"{0}"' -f $serverPy), '--transport', 'stdio')
+    Start-Process -FilePath $python.Source `
+        -ArgumentList $serverArguments `
+        -WorkingDirectory $workspacePath
+}
 
 Write-Host "OllyDbg launched with plugin from $pluginPath"
-Write-Host 'MCP server launched with stdio transport.'
+if ($SkipServer) {
+    Write-Host 'MCP server launch skipped.'
+}
+else {
+    Write-Host 'MCP server launched with stdio transport.'
+}
