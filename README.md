@@ -46,6 +46,7 @@ request to the native bridge. Addresses are represented canonically as unsigned
 - owner-restricted, local-only named-pipe access
 - interruptible overlapped pipe I/O for clean plugin shutdown
 - bounded response-drain handshake before the server disconnects
+- native read-only-by-default gate for debugger mutations
 - reproducible 32-bit MSVC build and export validation
 - controlled x86 runtime target with a structured smoke-test report
 
@@ -59,6 +60,13 @@ confirmation:
 - `olly_prepare_session(clear_breakpoints=true, confirm_clear=true)`
 
 Session preparation no longer clears breakpoints by default.
+
+The native plugin independently blocks memory writes, software and hardware
+breakpoint changes, labels and comments unless OllyDbg was started with
+`OLLYBRIDGE_ALLOW_MUTATIONS=1`. The supplied launcher forces this setting to
+`0` by default and enables it only with `-EnableNativeMutations`. This protects
+direct same-user pipe access as well as MCP calls; MCP confirmation remains a
+second, separate safety layer.
 
 The native pipe rejects remote clients and applies an owner-only Windows access
 rule. This reduces accidental cross-user access, but it is not a substitute for
@@ -174,6 +182,13 @@ powershell -ExecutionPolicy Bypass -File .\start_olly_bridge.ps1 `
   -OllyDir 'C:\Tools\OllyDbg' `
   -PluginDir 'C:\Tools\OllyDbg\Plugins' `
   -RestartOlly
+
+# Explicitly enable native writes, breakpoint changes, labels and comments.
+.\start_olly_bridge.ps1 `
+  -OllyDir 'C:\Tools\OllyDbg' `
+  -PluginDir 'C:\Tools\OllyDbg\Plugins' `
+  -EnableNativeMutations `
+  -RestartOlly
 ```
 
 Pass `-TargetExe` to open a specific executable. `-PluginDllPath` selects a DLL
@@ -210,8 +225,10 @@ The default run is read-only. Two independent opt-ins extend it:
 .\integration\run_runtime_smoke.ps1 ... -AllowExecution
 ```
 
-The mutation check preserves a breakpoint that already existed at the probe.
-The execution check changes debuggee state and therefore remains separate. The
+The mutation check automatically launches OllyDbg with the native mutation
+gate enabled and preserves a breakpoint that already existed at the probe. The
+execution-only check does not enable native mutations. The execution check
+changes debuggee state and therefore remains separate. The
 launcher still refuses to terminate an existing OllyDbg instance unless
 `-RestartOlly` is supplied. Pass `-SkipIniUpdate` only when the configured plugin
 directory is already correct.

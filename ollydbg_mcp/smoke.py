@@ -21,6 +21,7 @@ REQUIRED_NATIVE_CAPABILITIES = (
     "bounded_json_parser",
     "paged_tables",
     "client_drain_wait",
+    "mutation_gate",
 )
 
 
@@ -177,6 +178,30 @@ def run_smoke(
         and body["native"].get("capabilities", {}).get("remote_clients") is False,
     )
 
+    mutation_gate_enabled = True
+    if allow_mutations:
+        mutation_gate_enabled = (
+            isinstance(status, dict) and status.get("mutations_enabled") is True
+        )
+        checks.append(
+            SmokeCheck(
+                name="mutation_gate_enabled",
+                ok=mutation_gate_enabled,
+                details={
+                    "mutations_enabled": (
+                        status.get("mutations_enabled")
+                        if isinstance(status, dict)
+                        else None
+                    )
+                },
+                error=(
+                    None
+                    if mutation_gate_enabled
+                    else "native mutation gate is disabled for this OllyDbg process"
+                ),
+            )
+        )
+
     module: dict[str, Any] | None = None
     if manifest is not None:
         ready = capture(
@@ -228,7 +253,7 @@ def run_smoke(
             and body.get("module", {}).get("present") is True,
         )
 
-        if allow_mutations:
+        if allow_mutations and mutation_gate_enabled:
             before = capture(
                 "breakpoint_before_mutation",
                 client.list_breakpoints,

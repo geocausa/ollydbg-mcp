@@ -24,7 +24,7 @@
 #define OLLYBRIDGE_WM_EXEC (WM_APP + 0x110)
 #define OLLYBRIDGE_WM_REQUEST (WM_APP + 0x111)
 #define BRIDGE_PROTOCOL_VERSION 2
-#define BRIDGE_PLUGIN_VERSION "2.3"
+#define BRIDGE_PLUGIN_VERSION "2.4"
 #ifndef PIPE_REJECT_REMOTE_CLIENTS
 #define PIPE_REJECT_REMOTE_CLIENTS 0x00000008
 #endif
@@ -60,6 +60,7 @@ static volatile LONG g_last_pause_reason = 0;
 static volatile LONG g_last_pause_reasonex = 0;
 static volatile ULONG_PTR g_last_pause_eip = 0;
 static volatile LONG g_pause_sequence = 0;
+static volatile LONG g_mutations_enabled = 0;
 static t_hardbpoint g_hardware_breakpoints[4];
 static int g_hardware_breakpoints_valid[4] = {0, 0, 0, 0};
 
@@ -407,6 +408,44 @@ static int parse_page_request(
   return 1;
 }
 
+static int text_equals_ignore_case(const char *left, const char *right) {
+  unsigned char left_char;
+  unsigned char right_char;
+  if (left == NULL || right == NULL) return 0;
+  while (*left != '\0' && *right != '\0') {
+    left_char = (unsigned char)*left;
+    right_char = (unsigned char)*right;
+    if (tolower(left_char) != tolower(right_char)) return 0;
+    left++;
+    right++;
+  }
+  return *left == '\0' && *right == '\0';
+}
+
+static int environment_truthy(const char *name) {
+  char value[16];
+  DWORD length;
+  if (name == NULL) return 0;
+  length = GetEnvironmentVariableA(name, value, (DWORD)sizeof(value));
+  if (length == 0 || length >= sizeof(value)) return 0;
+  value[length] = '\0';
+  return strcmp(value, "1") == 0 ||
+         text_equals_ignore_case(value, "true") ||
+         text_equals_ignore_case(value, "yes") ||
+         text_equals_ignore_case(value, "on");
+}
+
+static int command_requires_mutation(const char *command) {
+  if (command == NULL) return 0;
+  return strcmp(command, "write_memory") == 0 ||
+         strcmp(command, "set_breakpoint") == 0 ||
+         strcmp(command, "clear_breakpoint") == 0 ||
+         strcmp(command, "set_hardware_breakpoint") == 0 ||
+         strcmp(command, "clear_hardware_breakpoint") == 0 ||
+         strcmp(command, "set_label") == 0 ||
+         strcmp(command, "set_comment") == 0;
+}
+
 static void respond_error(char *out, size_t out_size, const char *message) {
   char escaped[512];
   size_t used = 0;
@@ -433,11 +472,14 @@ static void respond_stateful_error(char *out, size_t out_size, const char *messa
 }
 
 static void handle_status(char *out, size_t out_size) {
+  LONG mutations_enabled =
+      InterlockedCompareExchange(&g_mutations_enabled, 0, 0);
   snprintf(out, out_size,
-      "{\"ok\":true,\"protocol_version\":%d,\"plugin_version\":\"%s\",\"pipe\":\"\\\\\\\\.\\\\pipe\\\\OllyBridge110\",\"debug_status\":%d,\"last_pause_reason\":%ld,\"last_pause_reasonex\":%ld,\"last_pause_eip\":\"0x%08lX\",\"pause_sequence\":%ld,\"capabilities\":{\"native_wait_for_pause\":true,\"owner_only_pipe\":true,\"overlapped_pipe\":true,\"ui_thread_dispatch\":true,\"bounded_json_parser\":true,\"paged_tables\":true,\"client_drain_wait\":true,\"remote_clients\":false}}\n",
+      "{\"ok\":true,\"protocol_version\":%d,\"plugin_version\":\"%s\",\"pipe\":\"\\\\\\\\.\\\\pipe\\\\OllyBridge110\",\"debug_status\":%d,\"last_pause_reason\":%ld,\"last_pause_reasonex\":%ld,\"last_pause_eip\":\"0x%08lX\",\"pause_sequence\":%ld,\"mutations_enabled\":%s,\"capabilities\":{\"native_wait_for_pause\":true,\"owner_only_pipe\":true,\"overlapped_pipe\":true,\"ui_thread_dispatch\":true,\"bounded_json_parser\":true,\"paged_tables\":true,\"client_drain_wait\":true,\"mutation_gate\":true,\"remote_clients\":false}}\n",
       BRIDGE_PROTOCOL_VERSION, BRIDGE_PLUGIN_VERSION, (int)g_getstatus(),
       g_last_pause_reason, g_last_pause_reasonex, (ulong)g_last_pause_eip,
-      InterlockedCompareExchange(&g_pause_sequence, 0, 0));
+      InterlockedCompareExchange(&g_pause_sequence, 0, 0),
+      mutations_enabled ? "true" : "false");
 }
 
 static void handle_wait_for_pause_worker(const char *json, char *out, size_t out_size) {
@@ -1196,6 +1238,15 @@ static void dispatch_request(const char *json, char *out, size_t out_size) {
     respond_error(out, out_size, "Missing command");
     return;
   }
+  if (command_requires_mutation(command) &&
+      InterlockedCompareExchange(&g_mutations_enabled, 0, 0) == 0) {
+    respond_error(
+        out,
+        out_size,
+        "Native mutation gate is disabled; restart OllyDbg with "
+        "OLLYBRIDGE_ALLOW_MUTATIONS=1");
+    return;
+  }
   if (strcmp(command, "status") == 0) {
     handle_status(out, out_size);
   }
@@ -1411,6 +1462,9 @@ extc __declspec(dllexport) int cdecl _ODBG_Plugininit(int ollydbgversion, HWND h
   (void)features;
   WNDCLASSA window_class;
   g_ui_thread_id = GetCurrentThreadId();
+  InterlockedExchange(
+      &g_mutations_enabled,
+      environment_truthy("OLLYBRIDGE_ALLOW_MUTATIONS"));
   if (ollydbgversion < PLUGIN_VERSION) {
     return -1;
   }
@@ -1454,6 +1508,9 @@ extc __declspec(dllexport) int cdecl _ODBG_Plugininit(int ollydbgversion, HWND h
     DestroyWindow(g_command_window); g_command_window = NULL; return -1;
   }
   log_line("OllyBridge110 plugin loaded");
+  log_line(InterlockedCompareExchange(&g_mutations_enabled, 0, 0)
+      ? "  Native mutations: enabled"
+      : "  Native mutations: disabled (read-only gate)");
   log_line("  Named pipe: \\\\.\\pipe\\OllyBridge110");
   g_stop_event = CreateEventA(NULL, TRUE, FALSE, NULL);
   if (g_stop_event == NULL) {
@@ -1551,5 +1608,6 @@ extc __declspec(dllexport) void cdecl _ODBG_Plugindestroy(void) {
     g_command_window = NULL;
   }
   g_ui_thread_id = 0;
+  InterlockedExchange(&g_mutations_enabled, 0);
   UnregisterClassA(OLLYBRIDGE_WINDOW_CLASS, g_instance);
 }

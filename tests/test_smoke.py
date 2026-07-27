@@ -11,19 +11,20 @@ from ollydbg_mcp.smoke import SmokeManifest, run_smoke, wait_for_connection
 
 
 class FakeSmokeClient:
-    def __init__(self) -> None:
+    def __init__(self, *, mutations_enabled: bool = True) -> None:
+        self.mutations_enabled = mutations_enabled
         self.breakpoints: set[str] = set()
         self.set_calls: list[str] = []
         self.clear_calls: list[str] = []
         self.run_calls: list[str] = []
         self.step_calls = 0
 
-    @staticmethod
-    def status() -> dict[str, Any]:
+    def status(self) -> dict[str, Any]:
         return {
             "ok": True,
             "protocol_version": 2,
-            "plugin_version": "2.3",
+            "plugin_version": "2.4",
+            "mutations_enabled": self.mutations_enabled,
             "debug_status": 2,
             "debug_status_name": "event",
             "capabilities": {
@@ -34,6 +35,7 @@ class FakeSmokeClient:
                 "bounded_json_parser": True,
                 "paged_tables": True,
                 "client_drain_wait": True,
+                "mutation_gate": True,
                 "remote_clients": False,
             },
         }
@@ -204,6 +206,17 @@ def test_mutation_smoke_creates_and_cleans_probe_breakpoint() -> None:
     assert client.clear_calls == ["0x00401100"]
     assert client.breakpoints == set()
     assert check_by_name(report, "verify_probe_breakpoint_cleared")["ok"] is True
+
+
+def test_mutation_smoke_stops_before_breakpoint_calls_when_gate_is_disabled() -> None:
+    client = FakeSmokeClient(mutations_enabled=False)
+
+    report = run_smoke(client, manifest(), allow_mutations=True)
+
+    assert report["ok"] is False
+    assert check_by_name(report, "mutation_gate_enabled")["ok"] is False
+    assert client.set_calls == []
+    assert client.clear_calls == []
 
 
 def test_mutation_smoke_preserves_existing_probe_breakpoint() -> None:

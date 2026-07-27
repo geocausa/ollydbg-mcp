@@ -49,6 +49,7 @@ def test_runtime_runner_requires_genuine_sdk_and_uses_safe_launcher() -> None:
     assert "integration\\build_smoke_target.ps1" in RUNTIME_RUNNER
     assert "PluginDllPath = $pluginDll" in RUNTIME_RUNNER
     assert "SkipServer = $true" in RUNTIME_RUNNER
+    assert "$launcherArgs.EnableNativeMutations = $true" in RUNTIME_RUNNER
     assert '"--manifest"' in RUNTIME_RUNNER
     assert '"--allow-mutations"' in RUNTIME_RUNNER
     assert '"--allow-execution"' in RUNTIME_RUNNER
@@ -61,6 +62,8 @@ def test_manifest_target_is_ready_before_snapshot_inspection() -> None:
 def test_launcher_keeps_existing_behaviour_with_optional_smoke_inputs() -> None:
     assert "[string]$PluginDllPath" in LAUNCHER
     assert "[switch]$SkipServer" in LAUNCHER
+    assert "[switch]$EnableNativeMutations" in LAUNCHER
+    assert "OLLYBRIDGE_ALLOW_MUTATIONS" in LAUNCHER
     assert "Join-Path $workspacePath 'OllyBridge110.dll'" in LAUNCHER
     assert "if (!$SkipServer)" in LAUNCHER
     assert "MCP server launch skipped." in LAUNCHER
