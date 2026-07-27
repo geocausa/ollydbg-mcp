@@ -9,10 +9,10 @@ from dataclasses import dataclass, field
 from typing import Any, Protocol
 
 from .protocol import (
+    BridgeError,
     DEFAULT_PIPE_NAME,
     DEFAULT_TIMEOUT_SECONDS,
     MAX_PIPE_RESPONSE,
-    BridgeError,
 )
 
 
