@@ -21,21 +21,31 @@ jobs:
   apply:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: native-hardening-v2
-          fetch-depth: 0
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-      - name: Apply checked source transformations
-        run: |
-          python tools/native_patch_protocol.py
-          python tools/native_patch_pipe.py
-          git diff --check
-      - name: Commit generated native source
+      - name: Fetch working branch quietly
         shell: bash
         run: |
+          git init -q
+          git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git fetch -q --depth=1 origin native-hardening-v2
+          git checkout -q -B native-hardening-v2 FETCH_HEAD
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Apply checked source transformations
+        shell: bash
+        run: |
+          set +e
+          python tools/native_patch_protocol.py >native-patch.log 2>&1
+          status=$?
+          if [ $status -eq 0 ]; then
+            python tools/native_patch_pipe.py >>native-patch.log 2>&1
+            status=$?
+          fi
+          cat native-patch.log
+          exit $status
+      - name: Validate and commit generated native source
+        shell: bash
+        run: |
+          git diff --check
           if git diff --quiet; then
             echo "No native source changes were produced"
             exit 1
