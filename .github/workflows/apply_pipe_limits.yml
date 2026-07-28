@@ -41,14 +41,14 @@ jobs:
       - name: Commit production changes
         shell: bash
         run: |
+          git restore .github/workflows/python.yml tools/apply_pipe_framing.py
           if git diff --quiet; then
             echo "No production changes to commit."
             exit 0
           fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add .github/workflows/python.yml ollydbg_mcp/client.py ollydbg_mcp/smoke.py plugin_stub/ollydbg110_bridge.c tests/test_named_pipe_windows.py tests/test_native_source.py tests/test_smoke.py tests/test_transport.py
+          git add ollydbg_mcp/client.py ollydbg_mcp/smoke.py plugin_stub/ollydbg110_bridge.c tests/test_named_pipe_windows.py tests/test_native_source.py tests/test_smoke.py tests/test_transport.py
           git commit -m "Complete pipe deadline and framing fixes"
-          git restore tools/apply_pipe_framing.py
           git pull --rebase origin pipe-deadline-framing-v1
           git push origin HEAD:pipe-deadline-framing-v1
