@@ -204,6 +204,15 @@ def test_real_named_pipe_rejects_invalid_json_response() -> None:
     server.join()
 
 
+def test_real_named_pipe_rejects_invalid_utf8_response() -> None:
+    server = WindowsPipeServer(lambda request: [(0.0, b'{"ok":true,"value":"\xff"}\n')])
+    server.start()
+
+    with pytest.raises(BridgeError, match="invalid UTF-8"):
+        make_transport(server).request({"command": "status"})
+    server.join()
+
+
 def test_real_named_pipe_rejects_non_object_response() -> None:
     server = WindowsPipeServer(lambda request: [(0.0, b"[1,2,3]\n")])
     server.start()

@@ -39,7 +39,11 @@ request to the native bridge. Addresses are represented canonically as unsigned
 - event-driven native pause sequencing with an automatic legacy fallback
 - strict bounded native JSON parsing with UTF-8 and Unicode-escape validation
 - strict native 32-bit address and byte-payload validation
-- hardware-breakpoint slot, size, index and alignment validation
+- hardware-breakpoint logical-slot, size, index and alignment validation
+- address-based deletion of bridge-owned hardware breakpoints
+- per-debuggee reset of bridge-owned native state
+- command-aware retries that never replay ambiguous state-changing requests
+- strict UTF-8 validation for native responses
 - address lookup, labels and comments
 - guarded debuggee-memory writes
 - combined debugger snapshots

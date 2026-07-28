@@ -15,6 +15,29 @@ from .protocol import (
     BridgeError,
 )
 
+# These commands do not mutate debugger/debuggee state, so an ambiguous empty
+# response may be retried without executing a state-changing operation twice.
+_EMPTY_RESPONSE_RETRY_SAFE = frozenset(
+    {
+        "status",
+        "wait_for_pause",
+        "goto",
+        "read_memory",
+        "read_disasm",
+        "get_registers",
+        "get_eip",
+        "current_instruction",
+        "goto_eip",
+        "read_stack",
+        "disasm_from_stack",
+        "lookup_address",
+        "list_breakpoints",
+        "list_modules",
+        "list_threads",
+        "list_hardware_breakpoints",
+    }
+)
+
 
 class BridgeTransport(Protocol):
     def request(self, payload: dict[str, Any]) -> dict[str, Any]: ...
@@ -30,6 +53,7 @@ class NamedPipeTransport:
     _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
     def request(self, payload: dict[str, Any]) -> dict[str, Any]:
+        command = str(payload.get("command", "unknown"))
         with self._lock:
             last_error: BridgeError | None = None
             for attempt in range(self.retries):
@@ -37,12 +61,17 @@ class NamedPipeTransport:
                     return self._request_once(payload)
                 except BridgeError as exc:
                     last_error = exc
-                    retryable = any(
-                        marker in str(exc)
-                        for marker in (
-                            "unable to open OllyDbg pipe",
-                            "pipe is busy",
-                            "pipe returned an empty response",
+                    message = str(exc)
+                    # Opening failures happen before the request is delivered and
+                    # are always safe to retry. An empty response is ambiguous: the
+                    # server may already have executed the command, so only retry
+                    # commands explicitly classified as read-only/idempotent.
+                    retryable = (
+                        "unable to open OllyDbg pipe" in message
+                        or "pipe is busy" in message
+                        or (
+                            "pipe returned an empty response" in message
+                            and command in _EMPTY_RESPONSE_RETRY_SAFE
                         )
                     )
                     if not retryable or attempt + 1 >= self.retries:
@@ -203,7 +232,10 @@ class NamedPipeTransport:
         raw_bytes = b"".join(chunks).split(b"\n", 1)[0]
         if not raw_bytes:
             raise BridgeError(f"{command}: pipe returned an empty response")
-        raw = raw_bytes.decode("utf-8", errors="replace")
+        try:
+            raw = raw_bytes.decode("utf-8")
+        except UnicodeDecodeError as exc:
+            raise BridgeError(f"{command}: pipe returned invalid UTF-8") from exc
         try:
             body = json.loads(raw)
         except json.JSONDecodeError as exc:
