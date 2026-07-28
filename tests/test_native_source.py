@@ -95,7 +95,8 @@ def test_hardware_breakpoints_are_validated_before_api_calls() -> None:
     assert "Hardware breakpoint slot is not tracked by this plugin" in SOURCE
     assert "_Deletehardwarebreakbyaddr" in SOURCE
     assert "g_deletehardwarebreakpoint" not in SOURCE
-    assert "g_deletehardwarebreakbyaddr(g_hardware_breakpoints[index].addr)" in SOURCE
+    delete_by_address = "g_deletehardwarebreakbyaddr(g_hardware_breakpoints[index].addr)"
+    assert delete_by_address in SOURCE
     assert SOURCE.index("if (slot >= 4)") < SOURCE.index(
         "result = g_sethardwarebreakpoint(address, size, type);"
     )
@@ -103,7 +104,7 @@ def test_hardware_breakpoints_are_validated_before_api_calls() -> None:
     clear_end = SOURCE.index("static void handle_list_hardware_breakpoints(")
     clear_source = SOURCE[clear_start:clear_end]
     assert clear_source.index("index < 0 || index >= 4") < clear_source.index(
-        "g_deletehardwarebreakpoint(index)"
+        delete_by_address
     )
     assert "index >= 0 && index < 4" not in clear_source
 
@@ -144,7 +145,7 @@ def test_native_tables_are_paginated_with_bounded_page_sizes() -> None:
 
 def test_native_protocol_identifies_capabilities() -> None:
     assert "#define BRIDGE_PROTOCOL_VERSION 2" in SOURCE
-    assert "#define BRIDGE_PLUGIN_VERSION \"2.7\"" in SOURCE
+    assert '#define BRIDGE_PLUGIN_VERSION "2.7"' in SOURCE
     for capability in (
         "native_wait_for_pause",
         "owner_only_pipe",
