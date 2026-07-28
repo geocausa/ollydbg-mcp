@@ -1,10 +1,22 @@
 # OllyDbg MCP Bridge
 
-An MCP bridge for **OllyDbg 1.10**. It connects an MCP client to a small native
-OllyDbg plugin over a local Windows named pipe.
+A hardened MCP bridge for **OllyDbg 1.10**. It connects an MCP client to a
+small native OllyDbg plugin over a local Windows named pipe.
+
+**Current native plugin:** 2.8  
+**Bridge protocol:** 2
 
 The repository is source-first. Compiled DLLs, SDK files, caches, samples and
 machine-specific paths are intentionally excluded.
+
+## Project status
+
+The Python server, native bridge source, strict parsers, pipe transport and
+controlled x86 target are covered by automated linting, portable C89 harnesses,
+Windows Python 3.10/3.12 tests, real Windows named-pipe tests and a complete x86
+DLL compile/link/export check. Final ABI and debugger-behaviour confirmation
+still requires the supplied genuine-SDK runtime smoke test inside an actual
+OllyDbg 1.10 installation.
 
 ## Architecture
 
@@ -15,7 +27,7 @@ MCP client
     v
 Python MCP server
     |
-    | JSON over \\.\pipe\OllyBridge110
+    | newline-framed JSON over \\.\pipe\OllyBridge110
     v
 OllyDbg 1.10 plugin
     |
@@ -49,9 +61,12 @@ request to the native bridge. Addresses are represented canonically as unsigned
 - combined debugger snapshots
 - bridge capability and protocol-version reporting
 - bounded native response construction
-- serialized Python requests with bounded response waits
+- serialized Python requests with deadline-bound cancellable overlapped I/O
+- one shared request deadline covering client writes and response reads
+- newline-framed native request accumulation across fragmented or bytewise writes
+- bounded rejection of overlong unterminated requests before debugger dispatch
 - owner-restricted, local-only named-pipe access
-- interruptible overlapped pipe I/O for clean plugin shutdown
+- interruptible overlapped native pipe I/O for clean plugin shutdown
 - bounded response-drain handshake before the server disconnects
 - native read-only-by-default gate for debugger mutations
 - reproducible 32-bit MSVC build and export validation
@@ -133,6 +148,7 @@ The native source lives at:
 
 ```text
 plugin_stub/ollydbg110_bridge.c
+plugin_stub/bridge_framing.h
 plugin_stub/bridge_json.h
 plugin_stub/bridge_values.h
 ```
@@ -155,7 +171,7 @@ The build script:
 - links an x86 Windows DLL
 - links `Kernel32`, `User32` and `Advapi32`
 - verifies the PE image is 32-bit x86
-- verifies all eight required OllyDbg callback exports
+- verifies all nine required OllyDbg callback exports
 
 A successful real build produces:
 
@@ -172,8 +188,8 @@ GitHub Actions compiles and links the complete DLL on a Windows x86 MSVC
 environment using `tests/ollydbg_sdk_stub/Plugin.h`. That header is a clearly
 marked **test-only compile shim** containing only the names and fields needed to
 check this source tree. CI verifies syntax, warning cleanliness, linking, x86
-machine type and callback exports, then deletes the generated DLL without
-uploading it.
+machine type and all nine callback exports, then deletes the generated DLL
+without uploading it.
 
 The CI DLL must never be distributed or loaded into OllyDbg. It does not prove
 binary compatibility with the real SDK. Only the genuine-SDK command above
@@ -258,143 +274,3 @@ ollydbg-smoke `
 
 `python .\test_olly_bridge.py` remains a compatibility entry point for the same
 structured runner.
-
-## MCP tools
-
-Inspection:
-
-- `olly_status`
-- `olly_get_capabilities`
-- `olly_snapshot`
-- `olly_get_registers`
-- `olly_get_eip`
-- `olly_current_instruction`
-- `olly_read_memory`
-- `olly_read_disasm`
-- `olly_read_stack`
-- `olly_disasm_from_stack`
-- `olly_lookup_address`
-- `olly_list_modules`
-- `olly_list_threads`
-- `olly_list_breakpoints`
-- `olly_list_hardware_breakpoints`
-
-Navigation and metadata:
-
-- `olly_goto_address`
-- `olly_goto_eip`
-- `olly_set_label`
-- `olly_set_comment`
-
-Breakpoints and mutation:
-
-- `olly_set_breakpoint`
-- `olly_clear_breakpoint`
-- `olly_clear_all_breakpoints`
-- `olly_set_hardware_breakpoint`
-- `olly_clear_hardware_breakpoint`
-- `olly_write_memory`
-
-Execution:
-
-- `olly_run`
-- `olly_run_to_address`
-- `olly_step_into`
-- `olly_step_over`
-- `olly_pause`
-- `olly_continue`
-- `olly_wait_for_pause`
-- `olly_prepare_session`
-
-## Table pagination
-
-The native plugin keeps every table response within the 8 KB pipe buffer:
-
-- modules: at most 8 entries per native page
-- threads: at most 32 entries per native page
-- software breakpoints: at most 32 entries per native page
-
-The Python client follows all pages automatically. Existing MCP tools therefore
-still return one complete `modules`, `threads`, or `breakpoints` list instead of
-exposing page management to the caller. It rejects empty intermediate pages,
-non-progressing offsets, malformed item fields, excessive page counts and
-unreasonably large aggregate tables.
-
-A new Python server remains compatible with an older unpaged plugin DLL. To
-receive complete large tables from plugin version 2.2 or newer, update the
-Python server and plugin DLL together; an older Python client would only see the
-first native page.
-
-## Validation limits
-
-The Python boundary currently enforces:
-
-- addresses from `0x00000000` through `0xFFFFFFFF`
-- memory reads and writes of at most 1024 bytes
-- disassembly requests of at most 32 instructions
-- hardware breakpoint indexes from 0 through 3
-- execute hardware breakpoints of one byte
-- aligned two-byte and four-byte data breakpoints
-- operation timeouts of at most 300 seconds
-- at most 4096 native table pages and 100,000 aggregate table items
-
-The native parser independently validates the complete JSON document, exact
-field names, field types, integer ranges, UTF-8, escaped Unicode, duplicate
-requested fields, nesting depth and destination-buffer bounds. Native value
-parsers also reject addresses outside eight hexadecimal digits, signs, trailing
-junk and malformed or oversized byte payloads. Hardware-breakpoint size,
-alignment, tracked-slot availability and clear indexes are checked again inside
-the DLL before an OllyDbg API is called.
-
-## Testing
-
-Install development dependencies and run:
-
-```powershell
-python -m pip install -e '.[dev]'
-python -m ruff check .
-python -m pytest
-```
-
-The standalone parser harness can also be compiled without the OllyDbg SDK:
-
-```text
-cc -std=c89 -pedantic -Wall -Wextra -Werror tests/native_json_harness.c -o native_json_harness
-./native_json_harness
-cc -std=c89 -pedantic -Wall -Wextra -Werror tests/native_values_harness.c -o native_values_harness
-./native_values_harness
-```
-
-Most unit tests use a fake transport and do not require OllyDbg. A dedicated
-Windows suite exercises the Python client against real local named pipes,
-including fragmented replies, malformed replies, size limits, disconnects and
-timeouts. The controlled runtime target is compiled as fixed-base x86 in CI and
-its exported-address manifest is validated; the generated executable is then
-deleted and is never uploaded.
-
-Source assertions retain the local-only pipe, interruptible shutdown,
-response-drain handshake, pause sequencing, UI-thread dispatch, bounded parser,
-strict native values, hardware-breakpoint validation, execution-result
-validation, bounded response, bounded pagination, native-build and runtime-harness
-protections.
-
-GitHub Actions runs linting and unit tests on Windows with Python 3.10 and 3.12,
-exercises the transport through real Windows named pipes, compiles both native
-parser harnesses with strict C89 warnings on Ubuntu, compiles and inspects the
-complete 32-bit DLL, and compiles and inspects the controlled x86 target.
-
-## Current native limitations
-
-The native bridge remains intentionally small and compatible with OllyDbg 1.10.
-The repository can now build and validate the controlled target automatically,
-but GitHub-hosted CI cannot legally or practically load a genuine OllyDbg 1.10
-installation and proprietary SDK. Runtime ABI confirmation therefore remains a
-local Windows step through `integration/run_runtime_smoke.ps1`.
-
-The current bridge is substantially safer for normal local use, but it should
-still be treated as trusted-user debugger automation rather than a hardened
-service for hostile inputs.
-
-## License
-
-MIT. See [LICENSE](./LICENSE).
