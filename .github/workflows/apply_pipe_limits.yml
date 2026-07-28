@@ -1,0 +1,52 @@
+name: Apply pipe limit fixes
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize]
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-pipe-limits-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  apply:
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.head.ref == 'pipe-deadline-framing-v1'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Fetch branch quietly
+        shell: bash
+        run: |
+          git init -q
+          git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git fetch -q --depth=20 origin pipe-deadline-framing-v1
+          git checkout -q -B pipe-deadline-framing-v1 FETCH_HEAD
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - name: Apply exact transformations
+        shell: bash
+        run: |
+          if grep -q '#define BRIDGE_PLUGIN_VERSION "2.8"' plugin_stub/ollydbg110_bridge.c; then
+            echo "Pipe limit fixes are already applied."
+            exit 0
+          fi
+          python -m py_compile tools/apply_pipe_framing.py tools/apply_pipe_deadline_tests.py
+          python tools/apply_pipe_framing.py
+          python tools/apply_pipe_deadline_tests.py
+      - name: Commit production changes
+        shell: bash
+        run: |
+          if git diff --quiet; then
+            echo "No production changes to commit."
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add .github/workflows/python.yml ollydbg_mcp/client.py ollydbg_mcp/smoke.py plugin_stub/ollydbg110_bridge.c tests/test_named_pipe_windows.py tests/test_native_source.py tests/test_smoke.py tests/test_transport.py
+          git commit -m "Complete pipe deadline and framing fixes"
+          git pull --rebase origin pipe-deadline-framing-v1
+          git push origin HEAD:pipe-deadline-framing-v1
