@@ -165,6 +165,10 @@ class OllyBridgeClient:
                 ),
                 "command_aware_retries": True,
                 "strict_response_utf8": True,
+                "overlapped_client_io": True,
+                "fragmented_native_requests": bool(
+                    status.get("capabilities", {}).get("fragmented_requests")
+                ),
                 "atomic_snapshot": False,
             },
         }

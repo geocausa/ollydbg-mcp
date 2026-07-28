@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from pathlib import Path
 from typing import Any
 
 import pytest
 
 from ollydbg_mcp.protocol import BridgeError
 from ollydbg_mcp.transport import NamedPipeTransport
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 class ScriptedTransport(NamedPipeTransport):
@@ -66,3 +69,12 @@ def test_pre_delivery_open_failure_remains_retryable_for_stateful_command() -> N
 
     assert transport.request({"command": "run"}) == {"ok": True}
     assert transport.calls == 2
+
+
+
+def test_transport_source_uses_cancellable_overlapped_io() -> None:
+    source = (ROOT / "ollydbg_mcp" / "transport.py").read_text(encoding="utf-8")
+    assert "FILE_FLAG_OVERLAPPED" in source
+    assert "CancelIoEx" in source
+    assert "GetOverlappedResult" in source
+    assert 'finish_overlapped(write_overlapped, written, "writing request")' in source
