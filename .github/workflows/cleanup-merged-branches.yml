@@ -1,0 +1,46 @@
+name: Cleanup merged branches
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete merged work branches
+        shell: bash
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          git init -q
+          git remote add origin "https://x-access-token:${GITHUB_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+
+          branches=(
+            hardening-v1
+            native-hardening-v2
+            ui-thread-hardening-v3
+            json-parser-hardening-v4
+            pagination-hardening-v5
+            native-build-validation-v6
+            named-pipe-integration-v8
+            runtime-smoke-harness-v9
+            native-mutation-gate-v10
+            native-correctness-v11
+            execution-result-validation-v12
+            audit-fixes-v13
+            pipe-deadline-framing-v1
+          )
+
+          for branch in "${branches[@]}"; do
+            if git ls-remote --exit-code --heads origin "$branch" >/dev/null 2>&1; then
+              echo "Deleting merged branch: $branch"
+              git push origin --delete "$branch"
+            else
+              echo "Already absent: $branch"
+            fi
+          done
