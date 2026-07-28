@@ -31,7 +31,7 @@ class FakeSmokeClient:
         return {
             "ok": True,
             "protocol_version": 2,
-            "plugin_version": "2.7",
+            "plugin_version": "2.8",
             "mutations_enabled": self.mutations_enabled,
             "debug_status": 2,
             "debug_status_name": "event",
@@ -49,6 +49,7 @@ class FakeSmokeClient:
                 "execution_result_validation": True,
                 "hardware_breakpoint_address_delete": True,
                 "debuggee_reset": True,
+                "fragmented_requests": True,
                 "remote_clients": False,
             },
         }

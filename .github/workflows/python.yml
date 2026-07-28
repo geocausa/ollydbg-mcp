@@ -38,6 +38,10 @@ jobs:
         run: cc -std=c89 -pedantic -Wall -Wextra -Werror tests/native_values_harness.c -o native_values_harness
       - name: Run strict native value parser harness
         run: ./native_values_harness
+      - name: Compile fragmented request framing harness
+        run: cc -std=c89 -pedantic -Wall -Wextra -Werror tests/native_framing_harness.c -o native_framing_harness
+      - name: Run fragmented request framing harness
+        run: ./native_framing_harness
 
   native-dll:
     runs-on: windows-latest

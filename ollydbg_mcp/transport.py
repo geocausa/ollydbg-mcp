@@ -43,6 +43,16 @@ class BridgeTransport(Protocol):
     def request(self, payload: dict[str, Any]) -> dict[str, Any]: ...
 
 
+class _Overlapped(ctypes.Structure):
+    _fields_ = [
+        ("internal", ctypes.c_size_t),
+        ("internal_high", ctypes.c_size_t),
+        ("offset", ctypes.c_uint32),
+        ("offset_high", ctypes.c_uint32),
+        ("h_event", ctypes.c_void_p),
+    ]
+
+
 @dataclass(slots=True)
 class NamedPipeTransport:
     pipe_name: str = DEFAULT_PIPE_NAME
@@ -88,8 +98,13 @@ class NamedPipeTransport:
         GENERIC_READ = 0x80000000
         GENERIC_WRITE = 0x40000000
         OPEN_EXISTING = 3
+        FILE_FLAG_OVERLAPPED = 0x40000000
         INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
         ERROR_BROKEN_PIPE = 109
+        ERROR_IO_PENDING = 997
+        ERROR_NOT_FOUND = 1168
+        WAIT_OBJECT_0 = 0
+        WAIT_TIMEOUT = 258
 
         WaitNamedPipeW = kernel32.WaitNamedPipeW
         WaitNamedPipeW.argtypes = [ctypes.c_wchar_p, ctypes.c_uint32]
@@ -107,13 +122,43 @@ class NamedPipeTransport:
         ]
         CreateFileW.restype = ctypes.c_void_p
 
+        CreateEventW = kernel32.CreateEventW
+        CreateEventW.argtypes = [
+            ctypes.c_void_p,
+            ctypes.c_int,
+            ctypes.c_int,
+            ctypes.c_wchar_p,
+        ]
+        CreateEventW.restype = ctypes.c_void_p
+
+        ResetEvent = kernel32.ResetEvent
+        ResetEvent.argtypes = [ctypes.c_void_p]
+        ResetEvent.restype = ctypes.c_int
+
+        WaitForSingleObject = kernel32.WaitForSingleObject
+        WaitForSingleObject.argtypes = [ctypes.c_void_p, ctypes.c_uint32]
+        WaitForSingleObject.restype = ctypes.c_uint32
+
+        GetOverlappedResult = kernel32.GetOverlappedResult
+        GetOverlappedResult.argtypes = [
+            ctypes.c_void_p,
+            ctypes.POINTER(_Overlapped),
+            ctypes.POINTER(ctypes.c_uint32),
+            ctypes.c_int,
+        ]
+        GetOverlappedResult.restype = ctypes.c_int
+
+        CancelIoEx = kernel32.CancelIoEx
+        CancelIoEx.argtypes = [ctypes.c_void_p, ctypes.POINTER(_Overlapped)]
+        CancelIoEx.restype = ctypes.c_int
+
         WriteFile = kernel32.WriteFile
         WriteFile.argtypes = [
             ctypes.c_void_p,
             ctypes.c_void_p,
             ctypes.c_uint32,
             ctypes.POINTER(ctypes.c_uint32),
-            ctypes.c_void_p,
+            ctypes.POINTER(_Overlapped),
         ]
         WriteFile.restype = ctypes.c_int
 
@@ -134,7 +179,7 @@ class NamedPipeTransport:
             ctypes.c_void_p,
             ctypes.c_uint32,
             ctypes.POINTER(ctypes.c_uint32),
-            ctypes.c_void_p,
+            ctypes.POINTER(_Overlapped),
         ]
         ReadFile.restype = ctypes.c_int
 
@@ -156,7 +201,7 @@ class NamedPipeTransport:
             0,
             None,
             OPEN_EXISTING,
-            0,
+            FILE_FLAG_OVERLAPPED,
             None,
         )
         if handle == INVALID_HANDLE_VALUE:
@@ -166,24 +211,80 @@ class NamedPipeTransport:
                 f"(WinError {last_error}). Is the plugin loaded?"
             )
 
+        write_event: int | None = None
+        read_event: int | None = None
         message = (json.dumps(payload, separators=(",", ":")) + "\n").encode("utf-8")
+        message_buffer = ctypes.create_string_buffer(message)
         deadline = time.monotonic() + self.timeout_seconds
         chunks: list[bytes] = []
         total = 0
-        try:
-            written = ctypes.c_uint32(0)
-            if not WriteFile(
+
+        def cancel_and_drain(overlapped: _Overlapped) -> None:
+            if not CancelIoEx(handle, ctypes.byref(overlapped)):
+                error = ctypes.get_last_error()
+                if error != ERROR_NOT_FOUND:
+                    return
+            WaitForSingleObject(overlapped.h_event, 1000)
+
+        def finish_overlapped(
+            overlapped: _Overlapped,
+            transferred: ctypes.c_uint32,
+            action: str,
+        ) -> None:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                cancel_and_drain(overlapped)
+                raise BridgeError(
+                    f"{command}: timed out after {self.timeout_seconds:.2f}s {action}"
+                )
+            wait_ms = max(1, int((remaining * 1000) + 0.999))
+            wait_result = WaitForSingleObject(overlapped.h_event, wait_ms)
+            if wait_result == WAIT_TIMEOUT:
+                cancel_and_drain(overlapped)
+                raise BridgeError(
+                    f"{command}: timed out after {self.timeout_seconds:.2f}s {action}"
+                )
+            if wait_result != WAIT_OBJECT_0:
+                last_error = ctypes.get_last_error()
+                cancel_and_drain(overlapped)
+                raise BridgeError(
+                    f"{command}: failed while {action} (WinError {last_error})"
+                )
+            if not GetOverlappedResult(
                 handle,
-                ctypes.c_char_p(message),
-                len(message),
-                ctypes.byref(written),
-                None,
+                ctypes.byref(overlapped),
+                ctypes.byref(transferred),
+                False,
             ):
                 last_error = ctypes.get_last_error()
                 raise BridgeError(
-                    f"{command}: failed to write request to OllyDbg pipe "
-                    f"(WinError {last_error})"
+                    f"{command}: failed while {action} (WinError {last_error})"
                 )
+
+        try:
+            write_event = CreateEventW(None, True, False, None)
+            read_event = CreateEventW(None, True, False, None)
+            if not write_event or not read_event:
+                raise BridgeError(f"{command}: unable to create pipe I/O events")
+
+            write_overlapped = _Overlapped()
+            write_overlapped.h_event = write_event
+            written = ctypes.c_uint32(0)
+            ResetEvent(write_event)
+            if not WriteFile(
+                handle,
+                message_buffer,
+                len(message),
+                ctypes.byref(written),
+                ctypes.byref(write_overlapped),
+            ):
+                last_error = ctypes.get_last_error()
+                if last_error != ERROR_IO_PENDING:
+                    raise BridgeError(
+                        f"{command}: failed to write request to OllyDbg pipe "
+                        f"(WinError {last_error})"
+                    )
+                finish_overlapped(write_overlapped, written, "writing request")
             if written.value != len(message):
                 raise BridgeError(
                     f"{command}: incomplete pipe write ({written.value}/{len(message)} bytes)"
@@ -210,11 +311,23 @@ class NamedPipeTransport:
                     )
                 buffer = ctypes.create_string_buffer(read_size)
                 read = ctypes.c_uint32(0)
-                if not ReadFile(handle, buffer, read_size, ctypes.byref(read), None):
+                read_overlapped = _Overlapped()
+                read_overlapped.h_event = read_event
+                ResetEvent(read_event)
+                if not ReadFile(
+                    handle,
+                    buffer,
+                    read_size,
+                    ctypes.byref(read),
+                    ctypes.byref(read_overlapped),
+                ):
                     last_error = ctypes.get_last_error()
-                    raise BridgeError(
-                        f"{command}: failed to read pipe response (WinError {last_error})"
-                    )
+                    if last_error != ERROR_IO_PENDING:
+                        raise BridgeError(
+                            f"{command}: failed to read pipe response "
+                            f"(WinError {last_error})"
+                        )
+                    finish_overlapped(read_overlapped, read, "reading response")
                 if read.value == 0:
                     break
                 chunk = buffer.raw[: read.value]
@@ -224,9 +337,14 @@ class NamedPipeTransport:
                     break
             else:
                 raise BridgeError(
-                    f"{command}: timed out after {self.timeout_seconds:.2f}s waiting for response"
+                    f"{command}: timed out after {self.timeout_seconds:.2f}s "
+                    "waiting for response"
                 )
         finally:
+            if read_event:
+                CloseHandle(read_event)
+            if write_event:
+                CloseHandle(write_event)
             CloseHandle(handle)
 
         raw_bytes = b"".join(chunks).split(b"\n", 1)[0]

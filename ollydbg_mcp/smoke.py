@@ -27,6 +27,7 @@ REQUIRED_NATIVE_CAPABILITIES = (
     "execution_result_validation",
     "hardware_breakpoint_address_delete",
     "debuggee_reset",
+    "fragmented_requests",
 )
 
 

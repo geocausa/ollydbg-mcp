@@ -4,6 +4,7 @@ ROOT = Path(__file__).resolve().parents[1]
 SOURCE = (ROOT / "plugin_stub" / "ollydbg110_bridge.c").read_text(encoding="utf-8")
 PARSER = (ROOT / "plugin_stub" / "bridge_json.h").read_text(encoding="utf-8")
 VALUES = (ROOT / "plugin_stub" / "bridge_values.h").read_text(encoding="utf-8")
+FRAMING = (ROOT / "plugin_stub" / "bridge_framing.h").read_text(encoding="utf-8")
 EXPORTS = (ROOT / "plugin_stub" / "OllyBridge110.def").read_text(encoding="utf-8")
 
 
@@ -145,7 +146,7 @@ def test_native_tables_are_paginated_with_bounded_page_sizes() -> None:
 
 def test_native_protocol_identifies_capabilities() -> None:
     assert "#define BRIDGE_PROTOCOL_VERSION 2" in SOURCE
-    assert '#define BRIDGE_PLUGIN_VERSION "2.7"' in SOURCE
+    assert '#define BRIDGE_PLUGIN_VERSION "2.8"' in SOURCE
     for capability in (
         "native_wait_for_pause",
         "owner_only_pipe",
@@ -160,6 +161,7 @@ def test_native_protocol_identifies_capabilities() -> None:
         "execution_result_validation",
         "hardware_breakpoint_address_delete",
         "debuggee_reset",
+        "fragmented_requests",
         "remote_clients",
     ):
         assert capability in SOURCE
@@ -171,6 +173,16 @@ def test_debuggee_reset_clears_bridge_owned_session_state() -> None:
     assert "InterlockedExchange(&g_last_pause_reasonex, 0)" in SOURCE
     assert "_ODBG_Pluginreset" in SOURCE
     assert "_ODBG_Pluginreset" in EXPORTS
+
+
+def test_fragmented_requests_are_accumulated_until_newline() -> None:
+    assert '#include "bridge_framing.h"' in SOURCE
+    assert "static int read_framed_request(" in SOURCE
+    assert "bridge_frame_append(" in SOURCE
+    assert "Request exceeds pipe buffer before newline" in SOURCE
+    assert "Failed to read newline-terminated request" in SOURCE
+    assert "BRIDGE_FRAME_COMPLETE" in FRAMING
+    assert "BRIDGE_FRAME_OVERFLOW" in FRAMING
 
 
 def test_debugger_requests_are_marshaled_to_the_ui_thread() -> None:

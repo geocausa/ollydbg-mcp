@@ -8,6 +8,7 @@
 #include <string.h>
 
 #include "Plugin.h"
+#include "bridge_framing.h"
 #include "bridge_json.h"
 #include "bridge_values.h"
 
@@ -25,7 +26,7 @@
 #define OLLYBRIDGE_WM_EXEC (WM_APP + 0x110)
 #define OLLYBRIDGE_WM_REQUEST (WM_APP + 0x111)
 #define BRIDGE_PROTOCOL_VERSION 2
-#define BRIDGE_PLUGIN_VERSION "2.7"
+#define BRIDGE_PLUGIN_VERSION "2.8"
 #ifndef PIPE_REJECT_REMOTE_CLIENTS
 #define PIPE_REJECT_REMOTE_CLIENTS 0x00000008
 #endif
@@ -437,7 +438,7 @@ static void handle_status(char *out, size_t out_size) {
   LONG mutations_enabled =
       InterlockedCompareExchange(&g_mutations_enabled, 0, 0);
   snprintf(out, out_size,
-      "{\"ok\":true,\"protocol_version\":%d,\"plugin_version\":\"%s\",\"pipe\":\"\\\\\\\\.\\\\pipe\\\\OllyBridge110\",\"debug_status\":%d,\"last_pause_reason\":%ld,\"last_pause_reasonex\":%ld,\"last_pause_eip\":\"0x%08lX\",\"pause_sequence\":%ld,\"mutations_enabled\":%s,\"capabilities\":{\"native_wait_for_pause\":true,\"owner_only_pipe\":true,\"overlapped_pipe\":true,\"ui_thread_dispatch\":true,\"bounded_json_parser\":true,\"paged_tables\":true,\"client_drain_wait\":true,\"mutation_gate\":true,\"strict_native_values\":true,\"hardware_breakpoint_validation\":true,\"execution_result_validation\":true,\"hardware_breakpoint_address_delete\":true,\"debuggee_reset\":true,\"remote_clients\":false}}\n",
+      "{\"ok\":true,\"protocol_version\":%d,\"plugin_version\":\"%s\",\"pipe\":\"\\\\\\\\.\\\\pipe\\\\OllyBridge110\",\"debug_status\":%d,\"last_pause_reason\":%ld,\"last_pause_reasonex\":%ld,\"last_pause_eip\":\"0x%08lX\",\"pause_sequence\":%ld,\"mutations_enabled\":%s,\"capabilities\":{\"native_wait_for_pause\":true,\"owner_only_pipe\":true,\"overlapped_pipe\":true,\"ui_thread_dispatch\":true,\"bounded_json_parser\":true,\"paged_tables\":true,\"client_drain_wait\":true,\"mutation_gate\":true,\"strict_native_values\":true,\"hardware_breakpoint_validation\":true,\"execution_result_validation\":true,\"hardware_breakpoint_address_delete\":true,\"debuggee_reset\":true,\"fragmented_requests\":true,\"remote_clients\":false}}\n",
       BRIDGE_PROTOCOL_VERSION, BRIDGE_PLUGIN_VERSION, (int)g_getstatus(),
       g_last_pause_reason, g_last_pause_reasonex, (ulong)g_last_pause_eip,
       InterlockedCompareExchange(&g_pause_sequence, 0, 0),
@@ -1355,6 +1356,34 @@ static int read_pipe_overlapped(HANDLE pipe, void *buf, DWORD size, DWORD *read,
   return wait_for_pipe_io(pipe, ov, read);
 }
 
+static int read_framed_request(
+    HANDLE pipe,
+    char *request,
+    DWORD request_size,
+    OVERLAPPED *ov,
+    int *overflowed) {
+  bridge_frame_state frame;
+  char chunk[1024];
+  DWORD read;
+  int frame_result;
+  if (request == NULL || request_size == 0 || overflowed == NULL) return 0;
+  bridge_frame_init(&frame);
+  request[0] = '\0';
+  *overflowed = 0;
+  for (;;) {
+    read = 0;
+    if (!read_pipe_overlapped(pipe, chunk, sizeof(chunk), &read, ov) || read == 0)
+      return 0;
+    frame_result = bridge_frame_append(
+        &frame, request, (size_t)request_size, chunk, (size_t)read);
+    if (frame_result == BRIDGE_FRAME_COMPLETE) return 1;
+    if (frame_result == BRIDGE_FRAME_OVERFLOW) {
+      *overflowed = 1;
+      return 0;
+    }
+  }
+}
+
 static int write_pipe_overlapped(HANDLE pipe, const void *buf, DWORD size, DWORD *written, OVERLAPPED *ov) {
   ResetEvent(ov->hEvent); *written = 0;
   if (WriteFile(pipe, buf, size, written, ov)) return 1;
@@ -1387,7 +1416,8 @@ static DWORD WINAPI pipe_thread_main(LPVOID param) {
   InterlockedExchange(&g_running, 1);
   while (WaitForSingleObject(g_stop_event, 0) == WAIT_TIMEOUT) {
     HANDLE pipe; OVERLAPPED ov; char request[PIPE_BUFFER_SIZE];
-    char response[PIPE_BUFFER_SIZE]; DWORD read = 0, written = 0;
+    char response[PIPE_BUFFER_SIZE]; DWORD written = 0;
+    int request_overflowed = 0;
     ZeroMemory(&ov, sizeof(ov)); ov.hEvent = CreateEventA(NULL, TRUE, FALSE, NULL);
     if (ov.hEvent == NULL) break;
     pipe = CreateNamedPipeA(PIPE_NAME, PIPE_ACCESS_DUPLEX | FILE_FLAG_OVERLAPPED,
@@ -1400,9 +1430,9 @@ static DWORD WINAPI pipe_thread_main(LPVOID param) {
     }
     if (connect_pipe_overlapped(pipe, &ov)) {
       ZeroMemory(request, sizeof(request)); ZeroMemory(response, sizeof(response));
-      if (read_pipe_overlapped(pipe, request, sizeof(request) - 1, &read, &ov) && read > 0) {
+      if (read_framed_request(
+              pipe, request, sizeof(request), &ov, &request_overflowed)) {
         char command[64];
-        request[read] = '\0';
         if (extract_string_field(request, "command", command, sizeof(command)) &&
             strcmp(command, "wait_for_pause") == 0) {
           handle_wait_for_pause_worker(request, response, sizeof(response));
@@ -1412,7 +1442,10 @@ static DWORD WINAPI pipe_thread_main(LPVOID param) {
         }
       }
       else if (WaitForSingleObject(g_stop_event, 0) != WAIT_OBJECT_0) {
-        respond_error(response, sizeof(response), "Failed to read from pipe");
+        if (request_overflowed)
+          respond_error(response, sizeof(response), "Request exceeds pipe buffer before newline");
+        else
+          respond_error(response, sizeof(response), "Failed to read newline-terminated request");
       }
       if (response[0] != '\0' && WaitForSingleObject(g_stop_event, 0) != WAIT_OBJECT_0) {
         if (write_pipe_overlapped(
